@@ -64,6 +64,19 @@ def train_cvae(cfg: dict):
         opt = torch.optim.AdamW(model.parameters(), lr=tcfg["lr"])
         scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda" and cfg["training"]["mixed_precision"]))
 
+    # Resume from the last saved cvae_epochN.pt if --resume is set in cfg.
+    # `start_epoch` is the next epoch index to train (0-based), so e.g. if
+    # we resume from cvae_epoch1.pt we start training at epoch index 1 = "epoch 2".
+    start_epoch = 0
+    if cfg["training"].get("resume", False):
+        existing = sorted(ckpt_dir.glob("cvae_epoch*.pt"),
+                          key=lambda p: int(p.stem.replace("cvae_epoch", "")))
+        if existing:
+            last = existing[-1]
+            with Spinner(f"Resuming CVAE from {last.name}"):
+                model.load_state_dict(torch.load(last, map_location=device)["model"])
+            start_epoch = int(last.stem.replace("cvae_epoch", ""))
+
     epochs = 1 if smoke else tcfg["epochs"]
     accum = tcfg["grad_accum"]
     step = 0
@@ -71,7 +84,7 @@ def train_cvae(cfg: dict):
     loss_log = LossLogger(ckpt_dir / "logs" / "cvae_loss.csv",
                           fields=["loss", "rec", "kl"])
     sample_batch = next(iter(loader))                        # frozen batch for visual progress
-    epoch_bar = pbar(range(epochs), desc="CVAE epochs", unit="epoch")
+    epoch_bar = pbar(range(start_epoch, epochs), desc="CVAE epochs", unit="epoch")
     for epoch in epoch_bar:
         model.train()
         iter_bar = pbar(loader, desc=f"  CVAE ep {epoch+1}/{epochs}", unit="batch", leave=False)
@@ -171,6 +184,20 @@ def train_diffusion(cfg: dict, cvae_ckpt: str | None = None):
         scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda" and cfg["training"]["mixed_precision"]))
         ema = _EMA(unet, decay=tcfg["ema_decay"])
 
+    # Resume from last saved diffusion_epochN.pt if requested.
+    start_epoch = 0
+    if cfg["training"].get("resume", False):
+        existing = sorted(ckpt_dir.glob("diffusion_epoch*.pt"),
+                          key=lambda p: int(p.stem.replace("diffusion_epoch", "")))
+        if existing:
+            last = existing[-1]
+            with Spinner(f"Resuming diffusion from {last.name}"):
+                state = torch.load(last, map_location=device)
+                unet.load_state_dict(state["model"])
+                if "ema" in state:
+                    ema.shadow.load_state_dict(state["ema"])
+            start_epoch = int(last.stem.replace("diffusion_epoch", ""))
+
     loader = _make_loader(cfg, tcfg["batch_size"])
 
     epochs = 1 if smoke else tcfg["epochs"]
@@ -178,7 +205,7 @@ def train_diffusion(cfg: dict, cvae_ckpt: str | None = None):
     T = mcfg["timesteps"]
     preview_dir = ckpt_dir / "preview" / "diffusion"
     loss_log = LossLogger(ckpt_dir / "logs" / "diffusion_loss.csv", fields=["loss"])
-    epoch_bar = pbar(range(epochs), desc="Diffusion epochs", unit="epoch")
+    epoch_bar = pbar(range(start_epoch, epochs), desc="Diffusion epochs", unit="epoch")
     for epoch in epoch_bar:
         unet.train()
         iter_bar = pbar(loader, desc=f"  Diff ep {epoch+1}/{epochs}", unit="batch", leave=False)

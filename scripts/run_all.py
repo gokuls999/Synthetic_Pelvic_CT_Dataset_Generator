@@ -90,6 +90,8 @@ def main():
                     help="Don't auto-open the dashboard in a browser")
     ap.add_argument("--allow-sleep", action="store_true",
                     help="Allow the OS to sleep during the run (default: prevent sleep)")
+    ap.add_argument("--resume", action="store_true",
+                    help="Resume CVAE / diffusion from the highest-numbered epoch checkpoint on disk")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -99,6 +101,7 @@ def main():
     cfg["training"]["cvae"]["epochs"] = preset["cvae_epochs"]
     cfg["training"]["diffusion"]["epochs"] = preset["diff_epochs"]
     cfg["generation"]["num_patients"] = preset["num_patients"]
+    cfg["training"]["resume"] = args.resume
 
     skip = {s.strip() for s in args.skip.split(",") if s.strip()}
 
