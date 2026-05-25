@@ -1,11 +1,12 @@
 """One-shot end-to-end runner: cache -> labels -> train -> generate -> validate.
 
-Run this directly in your PowerShell so the progress UI (tqdm bars + spinner)
-renders live on YOUR terminal. Do NOT pipe to a file — that breaks in-place bar
-rendering.
+Run this directly in your PowerShell. A small embedded HTTP dashboard opens
+at http://127.0.0.1:8765/ in your browser showing live progress for every
+stage. Close the tab when the pipeline finishes.
 
-Presets (`--preset`):
+Presets:
   proof      : cap 5 vols/dataset, CVAE 3 ep, diff 3 ep, 8 patients.  (~1-2h)
+  midday     : cap 10 vols/dataset, CVAE 3 ep, diff 4 ep, 12 patients. (~2h)
   overnight  : cap 50 vols/dataset, CVAE 8 ep, diff 12 ep, 50 patients. (~6-10h)
   full       : no caps, CVAE 20 ep, diff 40 ep, 400 patients.          (days)
 
@@ -13,21 +14,22 @@ Examples:
     python scripts\\run_all.py --preset proof --device cuda
     python scripts\\run_all.py --preset overnight --device cuda
     python scripts\\run_all.py --preset overnight --skip cache    # reuse cache
-    python scripts\\run_all.py --preset full --skip cache,labels
+    python scripts\\run_all.py --preset midday --no-browser       # don't auto-open
 """
 
 from _common import add_repo_to_path, load_config
 add_repo_to_path()
 
 import argparse
-import sys
 import time
+import traceback
 
 from src.preprocessing import build_cache
 from src.pseudo_labels import make_pseudo_labels
 from src.train import train_cvae, train_diffusion
 from src.generate import generate_dataset
 from src.validate import validate_dataset
+from src import web_progress as wp
 
 
 PRESETS = {
@@ -36,6 +38,13 @@ PRESETS = {
         "cvae_epochs": 3,
         "diff_epochs": 3,
         "num_patients": 8,
+    },
+    "midday": {
+        # Bigger than proof, fits in ~2h on a GTX 1080 Ti.
+        "max_per_dataset": 10,
+        "cvae_epochs": 3,
+        "diff_epochs": 4,
+        "num_patients": 12,
     },
     "overnight": {
         "max_per_dataset": 50,
@@ -52,9 +61,20 @@ PRESETS = {
 }
 
 
-def _banner(s: str):
-    bar = "=" * 72
-    print(f"\n{bar}\n  {s}\n{bar}", flush=True)
+def _run_stage(stage_id: str, fn, *args, summary_log=None, **kwargs):
+    """Run one stage with the web dashboard tracking start/end + errors."""
+    wp.set_stage(stage_id)
+    try:
+        result = fn(*args, **kwargs)
+        if summary_log and result is not None:
+            wp.log_msg(summary_log(result) if callable(summary_log) else str(summary_log))
+        wp.finish_stage("done")
+        return result
+    except Exception as e:
+        wp.log_msg(f"ERROR in {stage_id}: {e}")
+        wp.finish_stage("error", error=str(e))
+        traceback.print_exc()
+        raise
 
 
 def main():
@@ -64,6 +84,9 @@ def main():
     ap.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     ap.add_argument("--skip", default="",
                     help="Comma-separated stages to skip: cache,labels,cvae,diff,generate,validate")
+    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--no-browser", action="store_true",
+                    help="Don't auto-open the dashboard in a browser")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -75,38 +98,56 @@ def main():
     cfg["generation"]["num_patients"] = preset["num_patients"]
 
     skip = {s.strip() for s in args.skip.split(",") if s.strip()}
+
+    label = (f"preset={args.preset}  device={args.device}  "
+             f"vols/ds={preset['max_per_dataset']}  "
+             f"cvae={preset['cvae_epochs']}ep  diff={preset['diff_epochs']}ep  "
+             f"patients={preset['num_patients']}")
+    url = wp.start_server(port=args.port, open_browser=not args.no_browser,
+                          run_label=label)
+
+    print()
+    print("=" * 72)
+    print(f"  Pipeline dashboard:  {url}")
+    print(f"  Preset:              {args.preset}")
+    print(f"  Device:              {args.device}")
+    print("=" * 72)
+    print("  (If your browser didn't open, paste the URL above into it.)")
+    print()
+
     t0 = time.time()
+    try:
+        if "cache" not in skip:
+            _run_stage("build_cache", build_cache, cfg,
+                       summary_log=lambda r: f"cache: ok={r['ok']} skipped={r['skipped']} errors={r['errors']}")
+        if "labels" not in skip:
+            _run_stage("pseudo_labels", make_pseudo_labels, cfg,
+                       summary_log=lambda r: f"labels: total={r['n_total']} plain={r['n_plain']} hilly={r['n_hilly']}")
+        if "cvae" not in skip:
+            _run_stage("train_cvae", train_cvae, cfg)
+        if "diff" not in skip:
+            _run_stage("train_diffusion", train_diffusion, cfg)
+        if "generate" not in skip:
+            _run_stage("generate", generate_dataset, cfg,
+                       summary_log=lambda r: f"wrote {len(r)} patients")
+        if "validate" not in skip:
+            _run_stage("validate", validate_dataset, cfg["paths"]["outputs_dir"],
+                       summary_log=lambda r: f"{r['n_ok']}/{r['n_patients']} patients OK")
 
-    if "cache" not in skip:
-        _banner(f"[1/5] BUILD CACHE  (max {preset['max_per_dataset']} vol/dataset)")
-        out = build_cache(cfg)
-        print(f"      cache: ok={out['ok']} skipped={out['skipped']} errors={out['errors']}")
+        mins = (time.time() - t0) / 60.0
+        print(f"\nDONE in {mins:.1f} min   outputs: {cfg['paths']['outputs_dir']}/\n")
+        wp.log_msg(f"pipeline finished in {mins:.1f} min")
+        # Leave dashboard up for 30s so you can review final state.
+        wp.stop_server(grace_s=30.0)
 
-    if "labels" not in skip:
-        _banner("[2/5] PSEUDO-LABELS  (plain vs hilly via morphometry + KMeans)")
-        out = make_pseudo_labels(cfg)
-        print(f"      labels: total={out['n_total']}  plain={out['n_plain']}  hilly={out['n_hilly']}")
-
-    if "cvae" not in skip:
-        _banner(f"[3/5] TRAIN CVAE  ({preset['cvae_epochs']} epochs)")
-        train_cvae(cfg)
-
-    if "diff" not in skip:
-        _banner(f"[4a/5] TRAIN DIFFUSION  ({preset['diff_epochs']} epochs)")
-        train_diffusion(cfg)
-
-    if "generate" not in skip:
-        _banner(f"[4b/5] GENERATE  ({preset['num_patients']} synthetic patients)")
-        summaries = generate_dataset(cfg)
-        print(f"      wrote {len(summaries)} patients -> {cfg['paths']['outputs_dir']}")
-
-    if "validate" not in skip:
-        _banner("[5/5] VALIDATE  (DICOM sanity check)")
-        rpt = validate_dataset(cfg["paths"]["outputs_dir"])
-        print(f"      {rpt['n_ok']}/{rpt['n_patients']} patients OK")
-
-    mins = (time.time() - t0) / 60.0
-    _banner(f"DONE in {mins:.1f} min   (outputs: {cfg['paths']['outputs_dir']}/)")
+    except KeyboardInterrupt:
+        wp.log_msg("interrupted by user")
+        wp.stop_server(grace_s=2.0)
+        raise
+    except Exception:
+        # Already logged in _run_stage; keep dashboard up longer so user can read error.
+        wp.stop_server(grace_s=60.0)
+        raise
 
 
 if __name__ == "__main__":

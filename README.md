@@ -47,6 +47,17 @@ ct_data_for_generator/masks/* ──┘                 │
                           → open Patient_NNNN/DICOM/ in 3D Slicer
 ```
 
+## Live progress dashboard
+
+Every pipeline run opens a self-contained HTTP dashboard at
+`http://127.0.0.1:8765/` in your default browser. One card per stage
+(build_cache, pseudo_labels, train_cvae, train_diffusion, generate, validate)
+with status icon, progress bar, percentage, postfix (epoch/loss/region),
+elapsed + ETA, and a rolling log at the bottom. Refreshes every 250 ms.
+
+No external deps -- pure Python `http.server` on a background thread.
+Pass `--no-browser` to suppress auto-opening, `--port N` to change port.
+
 ## Quick start
 
 ```powershell

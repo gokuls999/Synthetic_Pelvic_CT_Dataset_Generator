@@ -1,97 +1,133 @@
-"""Progress bars + spinner utilities (single source of truth for the project).
+"""Progress primitives that publish to the web dashboard (src.web_progress).
 
-Two primitives:
-  * `pbar(iterable, total, desc, ...)` -- a thin wrapper around tqdm with a
-    consistent format used everywhere we have a known-length loop.
-  * `Spinner(desc)` -- context manager that animates a loading icon on a
-    background thread for one-off operations whose duration is unknown
-    (loading checkpoints, indexing a cache, fitting KMeans, etc.).
+Kept the same `pbar(...)` / `Spinner(...)` API so existing call sites don't change:
+  * `pbar(iterable, total, desc, ...)`  -- behaves like a tqdm iterator; every
+    `__next__` ticks the active stage's `current`. `set_postfix(**kw)` /
+    `set_postfix_str(s)` push a one-line summary under the bar.
+  * `Spinner(desc)` context manager -- shows an indeterminate (animated) bar
+    on the active stage while inside the `with` block.
 
-Both are ASCII-safe so Windows cp1252 consoles don't blow up.
+Outer/inner bar layering: each stage is a single web card. The outermost
+pbar() that wraps an iterable controls `current/total`; nested pbars()
+(e.g. inner batch loop while outer epoch loop is running) take over the
+display for their duration, then the outer call resumes by re-asserting
+its own total when it next ticks.
+
+This module never imports tqdm and never writes to stdout, so there is no
+terminal-rendering issue to work around.
 """
 
 from __future__ import annotations
 
-import sys
 import threading
-import time
 from typing import Iterable, Iterator, Optional
 
-from tqdm import tqdm
+from . import web_progress as wp
 
 
-SPINNER_FRAMES_ASCII = ["|", "/", "-", "\\"]
+class _Bar:
+    """Iterator wrapper that publishes progress to the web dashboard."""
 
+    def __init__(self, iterable: Optional[Iterable], total: Optional[int],
+                 desc: Optional[str], leave: bool):
+        self.iterable = iterable
+        self.total = total or (len(iterable) if hasattr(iterable, "__len__") else 0)
+        self.desc = desc or ""
+        self.leave = leave
+        self.n = 0
+        self._postfix = ""
+        # Reset the active stage's counters for this bar.
+        wp.update_stage(current=0, total=self.total)
+        if self.desc:
+            wp.update_stage(postfix=self.desc)
 
-class Spinner:
-    """Animated `loading...` indicator for indeterminate-duration ops.
+    def __iter__(self) -> Iterator:
+        if self.iterable is None:
+            return iter([])
+        it = iter(self.iterable)
+        while True:
+            try:
+                item = next(it)
+            except StopIteration:
+                return
+            yield item
+            self.n += 1
+            # Reassert own total each tick so nested bars can re-claim the card
+            # cleanly when control returns to the outer loop.
+            wp.update_stage(current=self.n, total=self.total,
+                            postfix=self._postfix or self.desc)
 
-    Usage:
-        with Spinner("Loading CVAE checkpoint"):
-            cvae.load_state_dict(torch.load(...))
-    """
+    def update(self, n: int = 1) -> None:
+        self.n += n
+        wp.update_stage(current=self.n, total=self.total,
+                        postfix=self._postfix or self.desc)
 
-    def __init__(self, desc: str = "Loading", frames=None,
-                 interval: float = 0.12, stream=None):
-        self.desc = desc
-        self.frames = frames or SPINNER_FRAMES_ASCII
-        self.interval = interval
-        self.stream = stream or sys.stdout
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._t0 = 0.0
+    def set_postfix(self, **kwargs) -> None:
+        self._postfix = " ".join(f"{k}={v}" for k, v in kwargs.items())
+        wp.update_stage(postfix=self._postfix, total=self.total)
 
-    def __enter__(self) -> "Spinner":
-        self._t0 = time.time()
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-        self._thread.start()
+    def set_postfix_str(self, s: str) -> None:
+        self._postfix = str(s)
+        wp.update_stage(postfix=self._postfix, total=self.total)
+
+    def close(self) -> None:
+        # The owning stage controls finish_stage; bar close is a no-op here.
+        pass
+
+    # Support `with pbar(...) as bar:`
+    def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=0.5)
-        elapsed = time.time() - self._t0
-        status = "done " if exc_type is None else "FAIL "
-        # Clear current spinner line (overwrite with spaces, then carriage return).
-        try:
-            line = f"\r[{status}] {self.desc} ({elapsed:.1f}s)"
-            pad = max(0, 80 - len(line))
-            self.stream.write(line + " " * pad + "\n")
-            self.stream.flush()
-        except Exception:
-            pass
-
-    def _spin(self):
-        i = 0
-        while not self._stop.is_set():
-            frame = self.frames[i % len(self.frames)]
-            try:
-                self.stream.write(f"\r {frame}  {self.desc}...")
-                self.stream.flush()
-            except Exception:
-                return
-            self._stop.wait(self.interval)
-            i += 1
+        self.close()
+        return False
 
 
 def pbar(iterable: Optional[Iterable] = None, total: Optional[int] = None,
          desc: Optional[str] = None, unit: str = "it", leave: bool = True,
-         **kwargs) -> tqdm:
-    """Standardized tqdm wrapper. Returns the tqdm object."""
-    return tqdm(
-        iterable, total=total, desc=desc, unit=unit, leave=leave,
-        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}",
-        dynamic_ncols=True, mininterval=0.2, **kwargs,
-    )
+         **_kwargs) -> _Bar:
+    """Drop-in tqdm replacement that publishes to the web dashboard."""
+    return _Bar(iterable, total, desc, leave)
 
 
 def iter_with_progress(iterable: Iterable, total: Optional[int] = None,
-                       desc: str = "Processing", unit: str = "it") -> Iterator:
-    """Convenience: yield items with a tqdm bar."""
+                       desc: str = "", unit: str = "it") -> Iterator:
+    """Convenience: yield items while ticking the active stage."""
     bar = pbar(iterable, total=total, desc=desc, unit=unit)
-    try:
-        for item in bar:
-            yield item
-    finally:
-        bar.close()
+    yield from bar
+    bar.close()
+
+
+class Spinner:
+    """Indeterminate progress (animated stripe) for unknown-duration ops.
+
+    Usage:
+        with Spinner("Loading CVAE checkpoint"):
+            cvae.load_state_dict(torch.load(path))
+    """
+
+    def __init__(self, desc: str = "Loading", **_kwargs):
+        self.desc = desc
+        self._prev_total = 0
+        self._prev_postfix = ""
+        self._prev_current = 0
+
+    def __enter__(self) -> "Spinner":
+        # Snapshot whatever the active stage was showing, switch to indeterminate.
+        snap = wp._state.snapshot()
+        active = next((s for s in snap["stages"] if s["id"] == snap["active_id"]), None)
+        if active is not None:
+            self._prev_total = active["total"]
+            self._prev_postfix = active["postfix"]
+            self._prev_current = active["current"]
+        wp.update_stage(current=0, total=0, postfix=self.desc)   # total=0 => indeterminate
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Restore previous bar state so the owning loop's progress reappears.
+        wp.update_stage(
+            current=self._prev_current,
+            total=self._prev_total,
+            postfix=self._prev_postfix,
+        )
+        return False

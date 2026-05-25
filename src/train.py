@@ -24,6 +24,7 @@ from .models import (
     CVAE, LatentUNet, DiffusionSchedule, cvae_loss, q_sample,
 )
 from .progress import pbar, Spinner
+from .diagnostics import save_cvae_previews, save_diffusion_previews, LossLogger
 
 
 def _device(requested: str) -> str:
@@ -66,6 +67,10 @@ def train_cvae(cfg: dict):
     epochs = 1 if smoke else tcfg["epochs"]
     accum = tcfg["grad_accum"]
     step = 0
+    preview_dir = ckpt_dir / "preview" / "cvae"
+    loss_log = LossLogger(ckpt_dir / "logs" / "cvae_loss.csv",
+                          fields=["loss", "rec", "kl"])
+    sample_batch = next(iter(loader))                        # frozen batch for visual progress
     epoch_bar = pbar(range(epochs), desc="CVAE epochs", unit="epoch")
     for epoch in epoch_bar:
         model.train()
@@ -100,7 +105,16 @@ def train_cvae(cfg: dict):
                 break
 
         iter_bar.close()
-        epoch_bar.set_postfix(loss=f"{running['loss']/max(running['n'],1):.3f}")
+        avg_loss = running["loss"] / max(running["n"], 1)
+        avg_rec = running["rec"] / max(running["n"], 1)
+        avg_kl = running["kl"] / max(running["n"], 1)
+        epoch_bar.set_postfix(loss=f"{avg_loss:.3f}")
+        loss_log.log(epoch + 1, loss=round(avg_loss, 4),
+                     rec=round(avg_rec, 4), kl=round(avg_kl, 4))
+        try:
+            save_cvae_previews(model, sample_batch, preview_dir, epoch + 1, device)
+        except Exception as e:
+            print(f"[warn] CVAE preview save failed: {e}")
         ckpt_path = ckpt_dir / f"cvae_epoch{epoch+1}.pt"
         torch.save({"model": model.state_dict(), "cfg": mcfg}, ckpt_path)
         latest = ckpt_dir / "cvae_latest.pt"
@@ -162,6 +176,8 @@ def train_diffusion(cfg: dict, cvae_ckpt: str | None = None):
     epochs = 1 if smoke else tcfg["epochs"]
     accum = tcfg["grad_accum"]
     T = mcfg["timesteps"]
+    preview_dir = ckpt_dir / "preview" / "diffusion"
+    loss_log = LossLogger(ckpt_dir / "logs" / "diffusion_loss.csv", fields=["loss"])
     epoch_bar = pbar(range(epochs), desc="Diffusion epochs", unit="epoch")
     for epoch in epoch_bar:
         unet.train()
@@ -198,7 +214,18 @@ def train_diffusion(cfg: dict, cvae_ckpt: str | None = None):
                 break
 
         iter_bar.close()
-        epoch_bar.set_postfix(loss=f"{running['loss']/max(running['n'],1):.4f}")
+        avg_loss = running["loss"] / max(running["n"], 1)
+        epoch_bar.set_postfix(loss=f"{avg_loss:.4f}")
+        loss_log.log(epoch + 1, loss=round(avg_loss, 5))
+        try:
+            save_diffusion_previews(
+                ema.shadow, cvae, sched, preview_dir, epoch + 1, device,
+                latent_size=cvae_mcfg["latent_size"],
+                latent_channels=cvae_mcfg["latent_channels"],
+                sampler_steps=30,
+            )
+        except Exception as e:
+            print(f"[warn] diffusion preview save failed: {e}")
         save = {"model": unet.state_dict(), "ema": ema.shadow.state_dict(), "cfg": mcfg}
         torch.save(save, ckpt_dir / f"diffusion_epoch{epoch+1}.pt")
         torch.save(save, ckpt_dir / "diffusion_latest.pt")
