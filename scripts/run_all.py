@@ -30,6 +30,7 @@ from src.train import train_cvae, train_diffusion
 from src.generate import generate_dataset
 from src.validate import validate_dataset
 from src import web_progress as wp
+from src.keep_awake import KeepAwake
 
 
 PRESETS = {
@@ -87,6 +88,8 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true",
                     help="Don't auto-open the dashboard in a browser")
+    ap.add_argument("--allow-sleep", action="store_true",
+                    help="Allow the OS to sleep during the run (default: prevent sleep)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -116,28 +119,31 @@ def main():
     print()
 
     t0 = time.time()
+    if not args.allow_sleep:
+        wp.log_msg("keep-awake enabled (system sleep blocked during run)")
+    keep_awake = KeepAwake() if not args.allow_sleep else _NullCtx()
     try:
-        if "cache" not in skip:
-            _run_stage("build_cache", build_cache, cfg,
-                       summary_log=lambda r: f"cache: ok={r['ok']} skipped={r['skipped']} errors={r['errors']}")
-        if "labels" not in skip:
-            _run_stage("pseudo_labels", make_pseudo_labels, cfg,
-                       summary_log=lambda r: f"labels: total={r['n_total']} plain={r['n_plain']} hilly={r['n_hilly']}")
-        if "cvae" not in skip:
-            _run_stage("train_cvae", train_cvae, cfg)
-        if "diff" not in skip:
-            _run_stage("train_diffusion", train_diffusion, cfg)
-        if "generate" not in skip:
-            _run_stage("generate", generate_dataset, cfg,
-                       summary_log=lambda r: f"wrote {len(r)} patients")
-        if "validate" not in skip:
-            _run_stage("validate", validate_dataset, cfg["paths"]["outputs_dir"],
-                       summary_log=lambda r: f"{r['n_ok']}/{r['n_patients']} patients OK")
+        with keep_awake:
+            if "cache" not in skip:
+                _run_stage("build_cache", build_cache, cfg,
+                           summary_log=lambda r: f"cache: ok={r['ok']} skipped={r['skipped']} errors={r['errors']}")
+            if "labels" not in skip:
+                _run_stage("pseudo_labels", make_pseudo_labels, cfg,
+                           summary_log=lambda r: f"labels: total={r['n_total']} plain={r['n_plain']} hilly={r['n_hilly']}")
+            if "cvae" not in skip:
+                _run_stage("train_cvae", train_cvae, cfg)
+            if "diff" not in skip:
+                _run_stage("train_diffusion", train_diffusion, cfg)
+            if "generate" not in skip:
+                _run_stage("generate", generate_dataset, cfg,
+                           summary_log=lambda r: f"wrote {len(r)} patients")
+            if "validate" not in skip:
+                _run_stage("validate", validate_dataset, cfg["paths"]["outputs_dir"],
+                           summary_log=lambda r: f"{r['n_ok']}/{r['n_patients']} patients OK")
 
         mins = (time.time() - t0) / 60.0
         print(f"\nDONE in {mins:.1f} min   outputs: {cfg['paths']['outputs_dir']}/\n")
         wp.log_msg(f"pipeline finished in {mins:.1f} min")
-        # Leave dashboard up for 30s so you can review final state.
         wp.stop_server(grace_s=30.0)
 
     except KeyboardInterrupt:
@@ -145,9 +151,13 @@ def main():
         wp.stop_server(grace_s=2.0)
         raise
     except Exception:
-        # Already logged in _run_stage; keep dashboard up longer so user can read error.
         wp.stop_server(grace_s=60.0)
         raise
+
+
+class _NullCtx:
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
 
 
 if __name__ == "__main__":
