@@ -69,7 +69,11 @@ model:
 # ----- Training -----
 training:
   device: cuda                  # falls back to cpu automatically
-  mixed_precision: true
+  # IMPORTANT: keep mixed_precision=false on Pascal-era GPUs (GTX 10xx).
+  # They have no tensor cores -> fp16 is software-emulated, gives ~zero speedup
+  # AND can overflow into NaN losses (we hit this on a 1080 Ti). Re-enable on
+  # Turing/Ampere/Ada (RTX 20xx+) for real fp16 speed.
+  mixed_precision: false
   num_workers: 2
   cvae:
     batch_size: 16
