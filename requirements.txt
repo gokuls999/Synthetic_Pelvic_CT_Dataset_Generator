@@ -14,3 +14,7 @@ SimpleITK>=2.3
 torch>=2.1
 torchvision>=0.16
 einops>=0.7
+
+# Optional: anatomy validation (TotalSegmentator). Install ONLY when ready to
+# validate; pulls ~2 GB of model weights on first use.
+# pip install totalsegmentator

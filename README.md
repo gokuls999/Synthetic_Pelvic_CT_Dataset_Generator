@@ -120,6 +120,26 @@ Each DICOM series:
 * `RescaleSlope=1, RescaleIntercept=-1024` so stored pixels are `HU + 1024`
 * loads directly in 3D Slicer as a 3D volume.
 
+## Anatomy validation (optional, post-generation)
+
+`scripts/validate.py` only checks DICOM structure (UIDs, Z monotonicity, HU
+range). For real anatomy plausibility, run TotalSegmentator on the synthetic
+volumes:
+
+```powershell
+pip install totalsegmentator               # ~2 GB model weights on first call
+python scripts\anatomy_validate.py
+```
+
+Per-patient checks:
+- **Hard fail** (reported as `ok=false`): sacrum, both femoral heads, both
+  hip bones must be present (mask >= 1000 voxels each).
+- **Soft fail** (logged, doesn't reject): left/right hip volume ratio >= 0.85;
+  pelvic inlet width within +/-2 sigma of the real training distribution.
+
+Output: `synthetic_dataset/anatomy_report.json` with per-patient verdicts and
+all measured structures.
+
 ## Known limits
 
 - Pelvic Z-range detection is bone-area heuristic; series with heavy metal
