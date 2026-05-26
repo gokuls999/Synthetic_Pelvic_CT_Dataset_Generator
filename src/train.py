@@ -100,8 +100,16 @@ def train_cvae(cfg: dict):
                 loss, rec, kl = cvae_loss(x, x_rec, mu, logvar, tcfg["kl_weight"])
                 loss = loss / accum
 
+            # NaN guard: skip the batch if loss is non-finite (would poison the model).
+            if not torch.isfinite(loss):
+                opt.zero_grad()
+                continue
+
             scaler.scale(loss).backward()
             if (i + 1) % accum == 0:
+                # Gradient clipping at L2 norm = 1.0 prevents single-batch explosions.
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(opt)
                 scaler.update()
                 opt.zero_grad()
@@ -221,14 +229,25 @@ def train_diffusion(cfg: dict, cvae_ckpt: str | None = None):
                 mu, _ = cvae.encode(x, cond_vec)
                 z0 = mu                                     # use posterior mean as target latent
 
+            # Guard against a poisoned CVAE producing non-finite latents.
+            if not torch.isfinite(z0).all():
+                continue
+
             t = torch.randint(0, T, (x.size(0),), device=device)
             with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
                 z_t, noise = q_sample(z0, t, sched)
                 eps_pred = unet(z_t, t, region_id, z_pos)
                 loss = F.mse_loss(eps_pred, noise) / accum
 
+            # NaN guard on UNet output.
+            if not torch.isfinite(loss):
+                opt.zero_grad()
+                continue
+
             scaler.scale(loss).backward()
             if (i + 1) % accum == 0:
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(unet.parameters(), max_norm=1.0)
                 scaler.step(opt)
                 scaler.update()
                 opt.zero_grad()
