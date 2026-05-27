@@ -27,11 +27,12 @@ _ES_CONTINUOUS       = 0x80000000
 _ES_SYSTEM_REQUIRED  = 0x00000001
 
 
-def _powercfg_query_timeout(setting: str) -> Optional[int]:
-    """Return the AC or DC standby timeout in seconds, or None if it fails.
+def _powercfg_query_minutes(setting: str) -> Optional[int]:
+    """Return the AC or DC standby timeout in MINUTES, or None on failure.
 
     `setting` is "ac" or "dc". Parses `powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE`
-    output for the matching Current Power Setting Index hex value.
+    -- the "Current Power Setting Index" hex value is in seconds, but the
+    matching `powercfg /change` command takes minutes, so we convert.
     """
     try:
         out = subprocess.check_output(
@@ -45,16 +46,19 @@ def _powercfg_query_timeout(setting: str) -> Optional[int]:
         if needle in line:
             hex_str = line.split(":")[-1].strip()
             try:
-                return int(hex_str, 16)
+                seconds = int(hex_str, 16)
+                return seconds // 60     # powercfg /change takes minutes
             except ValueError:
                 return None
     return None
 
 
-def _powercfg_set(setting: str, seconds: int) -> bool:
+def _powercfg_set_minutes(setting: str, minutes: int) -> bool:
+    """Set AC or DC standby timeout. `minutes` is the timeout in MINUTES
+    (0 = never sleep)."""
     flag = "standby-timeout-ac" if setting == "ac" else "standby-timeout-dc"
     try:
-        subprocess.run(["powercfg", "/change", flag, str(seconds)],
+        subprocess.run(["powercfg", "/change", flag, str(minutes)],
                        check=True, timeout=5, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL)
         return True
@@ -73,10 +77,10 @@ class KeepAwake:
     def __enter__(self):
         if self.system == "Windows":
             # Layer 1: change the power scheme so the OS literally cannot sleep.
-            self._orig_ac = _powercfg_query_timeout("ac")
-            self._orig_dc = _powercfg_query_timeout("dc")
-            _powercfg_set("ac", 0)
-            _powercfg_set("dc", 0)
+            self._orig_ac = _powercfg_query_minutes("ac")
+            self._orig_dc = _powercfg_query_minutes("dc")
+            _powercfg_set_minutes("ac", 0)
+            _powercfg_set_minutes("dc", 0)
             # Layer 2: tell Windows the thread is doing important work.
             try:
                 import ctypes
@@ -102,9 +106,9 @@ class KeepAwake:
                 pass
             # Restore original sleep timeouts (if we had any).
             if self._orig_ac is not None:
-                _powercfg_set("ac", self._orig_ac)
+                _powercfg_set_minutes("ac", self._orig_ac)
             if self._orig_dc is not None:
-                _powercfg_set("dc", self._orig_dc)
+                _powercfg_set_minutes("dc", self._orig_dc)
         elif self.system == "Darwin" and self._caffeinate is not None:
             try:
                 self._caffeinate.terminate()
