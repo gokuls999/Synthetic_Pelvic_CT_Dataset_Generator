@@ -39,6 +39,7 @@ PRESETS = {
         "cvae_epochs": 3,
         "diff_epochs": 3,
         "num_patients": 8,
+        "expected_total_h": 2.0,
     },
     "midday": {
         # Bigger than proof, fits in ~2h on a GTX 1080 Ti.
@@ -46,6 +47,7 @@ PRESETS = {
         "cvae_epochs": 3,
         "diff_epochs": 4,
         "num_patients": 12,
+        "expected_total_h": 3.0,
     },
     "overnight": {
         # Sized for the deeper-latent CVAE (64x64) introduced after the first
@@ -55,12 +57,14 @@ PRESETS = {
         "cvae_epochs": 20,
         "diff_epochs": 20,
         "num_patients": 50,
+        "expected_total_h": 80.0,
     },
     "full": {
         "max_per_dataset": None,
         "cvae_epochs": 20,
         "diff_epochs": 40,
         "num_patients": 400,
+        "expected_total_h": 168.0,        # ~1 week
     },
 }
 
@@ -112,8 +116,9 @@ def main():
              f"vols/ds={preset['max_per_dataset']}  "
              f"cvae={preset['cvae_epochs']}ep  diff={preset['diff_epochs']}ep  "
              f"patients={preset['num_patients']}")
+    expected_s = preset.get("expected_total_h", 0) * 3600.0 or None
     url = wp.start_server(port=args.port, open_browser=not args.no_browser,
-                          run_label=label)
+                          run_label=label, expected_total_s=expected_s)
 
     print()
     print("=" * 72)

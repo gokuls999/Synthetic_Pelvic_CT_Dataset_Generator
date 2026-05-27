@@ -87,12 +87,22 @@ class ProgressState:
         self.log: list[str] = []
         self.max_log = 250
         self.run_label: str = ""
+        # Optional whole-pipeline ETA: seconds the run is expected to take.
+        # Set via start_server(expected_total_s=...). The dashboard renders
+        # elapsed / expected / remaining in the header.
+        self.expected_total_s: Optional[float] = None
 
     def snapshot(self) -> dict:
         with self.lock:
+            elapsed = time.time() - self.started_at
+            remaining_s = None
+            if self.expected_total_s is not None:
+                remaining_s = max(0.0, self.expected_total_s - elapsed)
             return {
                 "started_at": self.started_at,
-                "elapsed_s": time.time() - self.started_at,
+                "elapsed_s": elapsed,
+                "expected_total_s": self.expected_total_s,
+                "remaining_s": remaining_s,
                 "run_label": self.run_label,
                 "active_id": self.active_id,
                 "stages": [
@@ -282,6 +292,14 @@ INDEX_HTML = r"""<!doctype html>
       <span id="run-label"></span>
       <span style="margin: 0 10px;">&middot;</span>
       <span>elapsed <b id="elapsed">0s</b></span>
+      <span id="eta-block" style="display: none;">
+        <span style="margin: 0 10px;">&middot;</span>
+        <span>est <b id="expected">--</b></span>
+        <span style="margin: 0 10px;">&middot;</span>
+        <span>remaining <b id="remaining" style="color: var(--accent);">--</b></span>
+        <span style="margin: 0 10px;">&middot;</span>
+        <span>finishes <b id="eta-time">--</b></span>
+      </span>
       <span style="margin: 0 10px;">&middot;</span>
       <span id="conn" style="color: var(--ok);">connected</span>
     </div>
@@ -319,9 +337,35 @@ function fmtDuration(s) {
   return h + "h " + (mr < 10 ? "0" : "") + mr + "m";
 }
 
+function fmtClockTime(epoch_s) {
+  const d = new Date(epoch_s * 1000);
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+  const isTomorrow = d.toDateString() === tomorrow.toDateString();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  if (sameDay) return hh + ":" + mm + " today";
+  if (isTomorrow) return hh + ":" + mm + " tomorrow";
+  const dow = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()];
+  return hh + ":" + mm + " " + dow + " " + d.getDate() + "/" + (d.getMonth() + 1);
+}
+
 function render(state) {
   document.getElementById("elapsed").textContent = fmtDuration(state.elapsed_s);
   document.getElementById("run-label").textContent = state.run_label || "";
+
+  // Pipeline-level ETA (if start_server got expected_total_s)
+  const etaBlock = document.getElementById("eta-block");
+  if (state.expected_total_s) {
+    etaBlock.style.display = "inline";
+    document.getElementById("expected").textContent = fmtDuration(state.expected_total_s);
+    document.getElementById("remaining").textContent = fmtDuration(state.remaining_s || 0);
+    const finishEpoch = state.started_at + state.expected_total_s;
+    document.getElementById("eta-time").textContent = fmtClockTime(finishEpoch);
+  } else {
+    etaBlock.style.display = "none";
+  }
 
   const container = document.getElementById("stages");
   const existing = new Map(
@@ -456,7 +500,8 @@ def _find_free_port(preferred: int) -> int:
 
 
 def start_server(port: int = 8765, open_browser: bool = True,
-                 run_label: str = "") -> str:
+                 run_label: str = "",
+                 expected_total_s: Optional[float] = None) -> str:
     """Start the dashboard HTTP server on a background thread. Returns the URL."""
     global _server
     if _server is not None:
@@ -469,7 +514,11 @@ def start_server(port: int = 8765, open_browser: bool = True,
     url = f"http://127.0.0.1:{port}/"
     _state.started_at = time.time()
     _state.run_label = run_label
+    _state.expected_total_s = expected_total_s
     log_msg(f"dashboard up at {url}")
+    if expected_total_s:
+        hours = expected_total_s / 3600.0
+        log_msg(f"estimated total runtime: {hours:.1f}h")
     if open_browser and not os.environ.get("NO_BROWSER"):
         try:
             webbrowser.open(url)
