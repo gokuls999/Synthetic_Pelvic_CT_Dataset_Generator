@@ -1,29 +1,37 @@
-# Register a Windows scheduled task that runs scripts/autostart.ps1 at every
-# system boot. Combined with the --resume default in run_all.py, this means
-# the pipeline survives unattended power cuts / reboots during holidays:
+# Register Windows scheduled tasks that survive power cuts / reboots:
 #
-#   power back on  ->  Windows boots  ->  task fires  ->  autostart.ps1
-#   ->  resume training from last epoch checkpoint  ->  dashboard back up.
+#   PelvicCT-Generator-Pipeline   (at system startup)
+#     Runs scripts/autostart.ps1 -- launches run_all.py with --resume.
 #
-# Run this script ONCE in an ELEVATED PowerShell window:
+#   PelvicCT-Generator-Dashboard  (at user logon)
+#     Runs scripts/open_dashboard.ps1 -- waits for the dashboard server to
+#     respond on http://127.0.0.1:8765/ then opens it in the default browser.
+#
+# So after power-on:
+#   boot -> pipeline relaunches in background (resumes from last epoch)
+#   logon -> dashboard tab opens by itself when the server is ready.
+#
+# Run ONCE in an ELEVATED PowerShell window (right-click PowerShell -> Run as
+# administrator):
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1
 #
-# To uninstall later:   scripts\uninstall_autostart.ps1
+# To uninstall:   powershell -ExecutionPolicy Bypass -File scripts\uninstall_autostart.ps1
 
 $ErrorActionPreference = 'Stop'
 
-$taskName     = 'PelvicCT-Generator-Pipeline'
-$projectDir   = 'D:\Muthu kumar\gen_ai_ct_pelvic'
-$scriptPath   = Join-Path $projectDir 'scripts\autostart.ps1'
-$maxRuntime   = New-TimeSpan -Days 30      # let it run for weeks if needed
-$restartGap   = New-TimeSpan -Minutes 5    # gap between automatic retries
+$projectDir         = 'D:\Muthu kumar\gen_ai_ct_pelvic'
+$pipelineTaskName   = 'PelvicCT-Generator-Pipeline'
+$dashboardTaskName  = 'PelvicCT-Generator-Dashboard'
+$autostartPs1       = Join-Path $projectDir 'scripts\autostart.ps1'
+$openDashboardPs1   = Join-Path $projectDir 'scripts\open_dashboard.ps1'
+$maxRuntime         = New-TimeSpan -Days 30
+$restartGap         = New-TimeSpan -Minutes 5
 
-if (-not (Test-Path $scriptPath)) {
-    throw "autostart.ps1 not found at $scriptPath"
-}
+if (-not (Test-Path $autostartPs1))      { throw "Not found: $autostartPs1" }
+if (-not (Test-Path $openDashboardPs1))  { throw "Not found: $openDashboardPs1" }
 
-# Are we admin? S4U / "run whether user is logged in or not" needs it.
+# Admin check
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
     [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -31,56 +39,78 @@ if (-not $isAdmin) {
     throw "Must run from an ELEVATED PowerShell (admin). Right-click PowerShell -> Run as administrator."
 }
 
-# Action: run our wrapper script under powershell.exe, hidden.
-$action = New-ScheduledTaskAction `
-    -Execute 'powershell.exe' `
-    -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File `"$scriptPath`"" `
-    -WorkingDirectory $projectDir
+function Register-PelvicCTTask {
+    param(
+        [string]   $TaskName,
+        [string]   $ScriptPath,
+        [object[]] $Triggers,
+        [bool]     $RunInteractive
+    )
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        Write-Host "Removing existing task '$TaskName' before reinstall..."
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+    }
 
-# Trigger: at every system startup. Also add a logon trigger as belt-and-braces
-# so it kicks in if the system is already up but the user just logged on.
-$triggerStart = New-ScheduledTaskTrigger -AtStartup
-$triggerLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $action = New-ScheduledTaskAction `
+        -Execute 'powershell.exe' `
+        -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File `"$ScriptPath`"" `
+        -WorkingDirectory $projectDir
 
-# Settings: keep it running on battery, restart on failure a few times.
-$settings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable `
-    -RestartCount 3 -RestartInterval $restartGap `
-    -ExecutionTimeLimit $maxRuntime `
-    -MultipleInstances IgnoreNew
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -RestartCount 3 -RestartInterval $restartGap `
+        -ExecutionTimeLimit $maxRuntime `
+        -MultipleInstances IgnoreNew
 
-# Principal: run as the current user with highest privileges, even if not
-# logged in (S4U). No stored password.
-$principal = New-ScheduledTaskPrincipal `
-    -UserId $env:USERNAME -LogonType S4U -RunLevel Highest
+    # Pipeline task: S4U so it can fire at boot even if no one is logged in.
+    # Dashboard task: must be interactive to open a browser, so use Interactive logon.
+    if ($RunInteractive) {
+        $principal = New-ScheduledTaskPrincipal `
+            -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+    } else {
+        $principal = New-ScheduledTaskPrincipal `
+            -UserId $env:USERNAME -LogonType S4U -RunLevel Highest
+    }
 
-# Register (replace if exists)
-if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-    Write-Host "Removing existing task '$taskName' before reinstall..."
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    Register-ScheduledTask -TaskName $TaskName `
+        -Action $action `
+        -Trigger $Triggers `
+        -Settings $settings `
+        -Principal $principal `
+        -Description "Pelvic CT generator pipeline ($TaskName)" | Out-Null
+    Write-Host "Installed: $TaskName"
 }
 
-Register-ScheduledTask -TaskName $taskName `
-    -Action $action `
-    -Trigger @($triggerStart, $triggerLogon) `
-    -Settings $settings `
-    -Principal $principal `
-    -Description "Auto-launch pelvic CT generator pipeline (resume-on-restart)."
+# 1) Pipeline launch at every system startup.
+Register-PelvicCTTask `
+    -TaskName  $pipelineTaskName `
+    -ScriptPath $autostartPs1 `
+    -Triggers  @(New-ScheduledTaskTrigger -AtStartup) `
+    -RunInteractive $false
+
+# 2) Dashboard browser opens at user logon (interactive session).
+Register-PelvicCTTask `
+    -TaskName  $dashboardTaskName `
+    -ScriptPath $openDashboardPs1 `
+    -Triggers  @(New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME) `
+    -RunInteractive $true
 
 Write-Host ""
-Write-Host "Installed scheduled task: $taskName"
-Write-Host "  Triggers: At system startup AND at logon ($env:USERNAME)"
-Write-Host "  Action:   $scriptPath"
-Write-Host "  Restart on failure: 3 times, 5 min apart"
+Write-Host "Both scheduled tasks installed."
 Write-Host ""
-Write-Host "Useful commands:"
-Write-Host "  Inspect:   Get-ScheduledTask -TaskName '$taskName' | Get-ScheduledTaskInfo"
-Write-Host "  Run now:   Start-ScheduledTask -TaskName '$taskName'"
-Write-Host "  Stop now:  Stop-ScheduledTask -TaskName '$taskName'"
-Write-Host "  Remove:    powershell -ExecutionPolicy Bypass -File scripts\uninstall_autostart.ps1"
+Write-Host "What will happen after you power off and back on:"
+Write-Host "  Windows boots -> '$pipelineTaskName' fires -> pipeline resumes in background."
+Write-Host "  You log in    -> '$dashboardTaskName' fires -> waits up to 10 min for the"
+Write-Host "                   dashboard server, then opens http://127.0.0.1:8765/ in your"
+Write-Host "                   default browser."
 Write-Host ""
-Write-Host "The task will skip launching if:"
-Write-Host "  - synthetic_dataset/anatomy_report.json shows the run is already complete"
-Write-Host "  - another pipeline is already responding on http://127.0.0.1:8765"
+Write-Host "Test without rebooting:"
+Write-Host "  Start-ScheduledTask -TaskName '$pipelineTaskName'"
+Write-Host "  Start-ScheduledTask -TaskName '$dashboardTaskName'"
+Write-Host ""
+Write-Host "Remove when training is done:"
+Write-Host "  powershell -ExecutionPolicy Bypass -File scripts\uninstall_autostart.ps1"
+Write-Host ""
+Write-Host "Per-trigger logs land under: $projectDir\logs\"

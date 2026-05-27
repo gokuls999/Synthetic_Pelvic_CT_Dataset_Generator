@@ -1,9 +1,9 @@
-# Remove the auto-restart scheduled task.
+# Remove BOTH auto-restart scheduled tasks (pipeline + dashboard).
 #
 # Run in an ELEVATED PowerShell window:
 #   powershell -ExecutionPolicy Bypass -File scripts\uninstall_autostart.ps1
 
-$taskName = 'PelvicCT-Generator-Pipeline'
+$tasks = @('PelvicCT-Generator-Pipeline', 'PelvicCT-Generator-Dashboard')
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
     [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -12,9 +12,11 @@ if (-not $isAdmin) {
     throw "Must run from an ELEVATED PowerShell (admin). Right-click PowerShell -> Run as administrator."
 }
 
-if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-    Write-Host "Removed scheduled task: $taskName"
-} else {
-    Write-Host "No scheduled task named '$taskName' found. Nothing to do."
+foreach ($t in $tasks) {
+    if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $t -Confirm:$false
+        Write-Host "Removed scheduled task: $t"
+    } else {
+        Write-Host "No task named '$t' found."
+    }
 }

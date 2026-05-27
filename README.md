@@ -134,29 +134,37 @@ it stopped:
 If a run is interrupted, just rerun the same command — no flags needed.
 Use `--restart-fresh` if you ever want to ignore on-disk state and start clean.
 
-**2. Auto-launch on Windows boot.** A scheduled task can fire `autostart.ps1`
-at every system boot (and at user logon) so the pipeline relaunches itself
-after a power cycle without you typing anything. Install once, in an
-**ELEVATED PowerShell** (right-click -> Run as administrator):
+**2. Auto-launch on Windows boot + auto-open dashboard at logon.** Two
+scheduled tasks survive a power cycle and put the dashboard back on your
+screen without you touching anything. Install once, in an **ELEVATED
+PowerShell** (right-click -> Run as administrator):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1
 ```
 
-The wrapper script:
-- Skips if `synthetic_dataset/anatomy_report.json` shows the run is already done
-- Skips if a pipeline is already responding on http://127.0.0.1:8765/
-- Otherwise waits 60s for system services then launches the pipeline
-- Logs each boot to `logs/autostart_YYYYMMDD_HHMMSS.log`
+What this registers:
 
-To remove the task when training is done:
+| Task | Trigger | What it does |
+|---|---|---|
+| `PelvicCT-Generator-Pipeline` | At system startup | Runs `autostart.ps1` -> waits 60 s for drivers -> launches `run_all.py --resume`. Skips if the run is already done or another pipeline is already up. |
+| `PelvicCT-Generator-Dashboard` | At user logon | Runs `open_dashboard.ps1` -> waits up to 10 min for the dashboard server to respond -> opens `http://127.0.0.1:8765/` in your default browser. |
+
+So after power off -> on -> log in: pipeline is already resuming in the
+background, and your browser opens to the live dashboard within seconds of
+login.
+
+Logs land per-trigger under `logs/autostart_*.log` and `logs/open_dashboard_*.log`.
+
+To remove both tasks when training is done:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\uninstall_autostart.ps1
 ```
 
-To test the wrapper without rebooting:
+To test the wrappers without rebooting:
 ```powershell
 Start-ScheduledTask -TaskName 'PelvicCT-Generator-Pipeline'
+Start-ScheduledTask -TaskName 'PelvicCT-Generator-Dashboard'
 ```
 
 ## Anatomy validation (optional, post-generation)
