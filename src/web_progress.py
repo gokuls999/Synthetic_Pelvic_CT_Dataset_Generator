@@ -35,12 +35,13 @@ from typing import Optional
 # =========================================================================
 
 STAGE_ORDER = [
-    ("build_cache",    "Build cache"),
-    ("pseudo_labels",  "Pseudo-labels"),
-    ("train_cvae",     "Train CVAE"),
-    ("train_diffusion","Train diffusion"),
-    ("generate",       "Generate patients"),
-    ("validate",       "Validate DICOM"),
+    ("build_cache",       "Build cache"),
+    ("pseudo_labels",     "Pseudo-labels"),
+    ("train_cvae",        "Train CVAE"),
+    ("train_diffusion",   "Train diffusion"),
+    ("generate",          "Generate patients"),
+    ("validate",          "Validate DICOM"),
+    ("anatomy_validate",  "Anatomy validation"),
 ]
 
 
