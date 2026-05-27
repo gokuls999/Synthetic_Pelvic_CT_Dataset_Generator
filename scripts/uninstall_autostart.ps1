@@ -9,7 +9,15 @@ $isAdmin = ([Security.Principal.WindowsPrincipal] `
     [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    throw "Must run from an ELEVATED PowerShell (admin). Right-click PowerShell -> Run as administrator."
+    Write-Host "Not elevated -- requesting admin privileges via UAC..."
+    $argList = "-ExecutionPolicy Bypass -NoExit -File `"$PSCommandPath`""
+    try {
+        Start-Process powershell -Verb RunAs -ArgumentList $argList
+        Start-Sleep -Seconds 3
+        exit 0
+    } catch {
+        throw "Failed to self-elevate: $_`nOpen PowerShell as Administrator manually and re-run."
+    }
 }
 
 foreach ($t in $tasks) {

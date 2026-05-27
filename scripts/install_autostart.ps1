@@ -31,12 +31,23 @@ $restartGap         = New-TimeSpan -Minutes 5
 if (-not (Test-Path $autostartPs1))      { throw "Not found: $autostartPs1" }
 if (-not (Test-Path $openDashboardPs1))  { throw "Not found: $openDashboardPs1" }
 
-# Admin check
+# Admin check -- if not elevated, relaunch ourselves with Start-Process -Verb RunAs
+# (triggers the UAC prompt) and exit the unprivileged copy.
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
     [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    throw "Must run from an ELEVATED PowerShell (admin). Right-click PowerShell -> Run as administrator."
+    Write-Host "Not elevated -- requesting admin privileges via UAC..."
+    $argList = "-ExecutionPolicy Bypass -NoExit -File `"$PSCommandPath`""
+    try {
+        Start-Process powershell -Verb RunAs -ArgumentList $argList
+        Write-Host "A new elevated PowerShell window opened. Click 'Yes' on the UAC prompt if you haven't already."
+        Write-Host "This window will close in 5 seconds."
+        Start-Sleep -Seconds 5
+        exit 0
+    } catch {
+        throw "Failed to self-elevate: $_`nOpen PowerShell as Administrator manually and re-run."
+    }
 }
 
 function Register-PelvicCTTask {
