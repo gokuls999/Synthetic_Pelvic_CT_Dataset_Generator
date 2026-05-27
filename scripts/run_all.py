@@ -48,9 +48,12 @@ PRESETS = {
         "num_patients": 12,
     },
     "overnight": {
+        # Sized for the deeper-latent CVAE (64x64) introduced after the first
+        # overnight run produced 0/50 anatomy pass. 20 + 20 epochs is roughly
+        # 3-4 days on a 1080 Ti at 4x more compute per step than the old config.
         "max_per_dataset": 50,
-        "cvae_epochs": 8,
-        "diff_epochs": 12,
+        "cvae_epochs": 20,
+        "diff_epochs": 20,
         "num_patients": 50,
     },
     "full": {

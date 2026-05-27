@@ -54,10 +54,14 @@ model:
     in_channels: 1
     base_channels: 64
     latent_channels: 4
-    latent_size: 32             # spatial size of latent map (256 / 8)
+    # 256 / 64 = 4x compression (was 8x at latent_size=32). Less aggressive ->
+    # preserves bone-frequency detail that TotalSegmentator can later detect.
+    # First overnight run at 32 produced 0/50 anatomy pass; bones got squashed
+    # away in the bottleneck. See git log for the autopsy.
+    latent_size: 64
     cond_dim: 16                # embedding size for region + z-position
   diffusion:
-    image_size: 32              # operates in latent space
+    image_size: 64              # must match cvae.latent_size
     in_channels: 4              # = cvae.latent_channels
     base_channels: 128
     channel_mults: [1, 2, 2, 4]
@@ -79,12 +83,18 @@ training:
     batch_size: 16
     lr: 2.0e-4
     epochs: 20
-    kl_weight: 1.0e-4
+    # Lowered from 1e-4 -> 1e-6: gives the CVAE much more latent capacity
+    # (KL term no longer dominates), so high-frequency bone structure isn't
+    # regularized away. The first overnight run had KL=5 at convergence with
+    # 1e-4 weight, indicating the bottleneck was being aggressively flattened.
+    kl_weight: 1.0e-6
     grad_accum: 1
   diffusion:
-    batch_size: 32
+    # 64x64 latent vs the old 32x32 = 4x more pixels per batch. Drop batch
+    # size 32 -> 16 to fit a 1080 Ti; the per-step compute is similar.
+    batch_size: 16
     lr: 1.0e-4
-    epochs: 40
+    epochs: 20
     grad_accum: 2
     ema_decay: 0.999
   # Smoke mode: tiny epoch count for end-to-end testing

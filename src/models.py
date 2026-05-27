@@ -105,50 +105,76 @@ class ConditionEmbedder(nn.Module):
 # =========================================================================
 
 class CVAE(nn.Module):
-    """1x256x256 -> latent_channels x 32 x 32. 3 downsample stages = /8."""
+    """Convolutional VAE with configurable depth.
+
+    The number of /2 downsample stages is computed from input_size and
+    latent_size:
+        n_down = log2(input_size / latent_size)
+    e.g. 256 -> 64 latent = 2 downsamples (less aggressive, more detail kept)
+         256 -> 32 latent = 3 downsamples (more compression, faster training)
+
+    Channel ladder doubles each stage, capped at base_channels * channel_cap.
+    """
 
     def __init__(self, in_channels: int = 1, base_channels: int = 64,
                  latent_channels: int = 4, latent_size: int = 32,
-                 cond_dim: int = 16, n_regions: int = 2):
+                 cond_dim: int = 16, n_regions: int = 2,
+                 input_size: int = 256, channel_cap: int = 8):
         super().__init__()
         self.latent_channels = latent_channels
         self.latent_size = latent_size
         self.cond = ConditionEmbedder(cond_dim, n_regions)
 
+        n_down = int(round(math.log2(input_size / latent_size)))
+        if input_size != latent_size * (2 ** n_down):
+            raise ValueError(
+                f"input_size {input_size} must equal latent_size {latent_size} * 2^n"
+            )
+
         ch = base_channels
-        # Encoder: 256 -> 128 -> 64 -> 32
-        self.enc_in = nn.Conv2d(in_channels, ch, 3, padding=1)
-        self.enc1 = ResBlock(ch, ch, cond_dim)
-        self.down1 = Downsample(ch)
-        self.enc2 = ResBlock(ch, ch * 2, cond_dim)
-        self.down2 = Downsample(ch * 2)
-        self.enc3 = ResBlock(ch * 2, ch * 4, cond_dim)
-        self.down3 = Downsample(ch * 4)
-        self.enc_mid = ResBlock(ch * 4, ch * 4, cond_dim)
+        # Channel mults: 1, 2, 4, ... capped at channel_cap.
+        # mults[0] = input stem, mults[i] = after i-th downsample, mults[-1] = bottleneck.
+        mults = []
+        m = 1
+        for _ in range(n_down + 1):
+            mults.append(m)
+            m = min(m * 2, channel_cap)
+        # so for n_down=2: mults = [1, 2, 4]; for n_down=3: [1, 2, 4, 8]
+
+        # Encoder
+        self.enc_in = nn.Conv2d(in_channels, ch * mults[0], 3, padding=1)
+        self.enc_blocks = nn.ModuleList()
+        self.downsamples = nn.ModuleList()
+        cur = ch * mults[0]
+        for i in range(n_down):
+            nxt = ch * mults[i + 1]
+            self.enc_blocks.append(ResBlock(cur, nxt, cond_dim))
+            self.downsamples.append(Downsample(nxt))
+            cur = nxt
+        self.enc_mid = ResBlock(cur, cur, cond_dim)
 
         # mu, logvar heads
-        self.to_mu = nn.Conv2d(ch * 4, latent_channels, 1)
-        self.to_logvar = nn.Conv2d(ch * 4, latent_channels, 1)
+        self.to_mu = nn.Conv2d(cur, latent_channels, 1)
+        self.to_logvar = nn.Conv2d(cur, latent_channels, 1)
 
-        # Decoder: 32 -> 64 -> 128 -> 256
-        self.from_latent = nn.Conv2d(latent_channels, ch * 4, 1)
-        self.dec_mid = ResBlock(ch * 4, ch * 4, cond_dim)
-        self.up1 = Upsample(ch * 4)
-        self.dec1 = ResBlock(ch * 4, ch * 2, cond_dim)
-        self.up2 = Upsample(ch * 2)
-        self.dec2 = ResBlock(ch * 2, ch, cond_dim)
-        self.up3 = Upsample(ch)
-        self.dec3 = ResBlock(ch, ch, cond_dim)
-        self.dec_out = nn.Conv2d(ch, in_channels, 3, padding=1)
+        # Decoder (mirror)
+        self.from_latent = nn.Conv2d(latent_channels, cur, 1)
+        self.dec_mid = ResBlock(cur, cur, cond_dim)
+        self.upsamples = nn.ModuleList()
+        self.dec_blocks = nn.ModuleList()
+        for i in reversed(range(n_down)):
+            nxt = ch * mults[i]
+            self.upsamples.append(Upsample(cur))
+            self.dec_blocks.append(ResBlock(cur, nxt, cond_dim))
+            cur = nxt
+        self.dec_out_block = ResBlock(cur, cur, cond_dim)
+        self.dec_out = nn.Conv2d(cur, in_channels, 3, padding=1)
 
     def encode(self, x, cond_vec):
         h = self.enc_in(x)
-        h = self.enc1(h, cond_vec)
-        h = self.down1(h)
-        h = self.enc2(h, cond_vec)
-        h = self.down2(h)
-        h = self.enc3(h, cond_vec)
-        h = self.down3(h)
+        for blk, ds in zip(self.enc_blocks, self.downsamples):
+            h = blk(h, cond_vec)
+            h = ds(h)
         h = self.enc_mid(h, cond_vec)
         return self.to_mu(h), self.to_logvar(h)
 
@@ -160,9 +186,10 @@ class CVAE(nn.Module):
     def decode(self, z, cond_vec):
         h = self.from_latent(z)
         h = self.dec_mid(h, cond_vec)
-        h = self.up1(h); h = self.dec1(h, cond_vec)
-        h = self.up2(h); h = self.dec2(h, cond_vec)
-        h = self.up3(h); h = self.dec3(h, cond_vec)
+        for ds, blk in zip(self.upsamples, self.dec_blocks):
+            h = ds(h)
+            h = blk(h, cond_vec)
+        h = self.dec_out_block(h, cond_vec)
         return torch.tanh(self.dec_out(h))   # output in [-1, 1] same as input window
 
     def forward(self, x, region_id, z_pos):
