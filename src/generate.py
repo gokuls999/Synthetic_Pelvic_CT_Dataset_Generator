@@ -116,10 +116,31 @@ def generate_volume(cfg: dict, region_id: int, patient_id: str, seed: int,
     )
 
 
+def _patient_is_complete(pdir: Path, expected_slices: int) -> bool:
+    """True if pdir has a fully-written synthetic patient.
+
+    Used by `generate_dataset` to skip patients that were already finished
+    before a previous run was interrupted (power cut, ^C, crash).
+    """
+    meta = pdir / "metadata.json"
+    if not meta.exists():
+        return False
+    dicom_dir = pdir / "DICOM"
+    if not dicom_dir.is_dir():
+        return False
+    n_dcm = sum(1 for _ in dicom_dir.glob("*.dcm"))
+    if n_dcm != expected_slices:
+        return False
+    return True
+
+
 def generate_dataset(cfg: dict, out_root: str | Path | None = None):
     """Generate all synthetic patients per cfg.generation and write outputs.
 
-    Returns a list of patient summaries (id, region, paths).
+    If cfg.generation.resume is true (default) we skip patient IDs whose
+    output directory is already complete -- so an interrupted run can be
+    finished by re-invoking the same command. Returns a list of patient
+    summaries (id, region, paths).
     """
     from .dicom_builder import write_dicom_series
     from .exports import write_png_jpg_metadata
@@ -128,20 +149,43 @@ def generate_dataset(cfg: dict, out_root: str | Path | None = None):
     out_root = Path(out_root or cfg["paths"]["outputs_dir"])
     out_root.mkdir(parents=True, exist_ok=True)
 
-    cvae, unet, sched, device = load_generators(cfg)
+    resume = bool(gcfg.get("resume", True))
+    expected_slices = int(gcfg["slices_per_volume"])
+
     n = int(gcfg["num_patients"])
     n_plain = int(round(n * float(gcfg["plain_fraction"])))
     n_hilly = n - n_plain
-
     plan = [0] * n_plain + [1] * n_hilly
     rng = np.random.default_rng(int(gcfg["seed"]))
     rng.shuffle(plan)
 
-    summaries = []
-    patient_bar = pbar(enumerate(plan, start=1), total=len(plan),
-                       desc="Generating patients", unit="pt")
-    for i, region_id in patient_bar:
+    # Identify completed patients up front so the progress bar is honest
+    # about how much work is left after the resume.
+    skipped = []
+    todo = []
+    for i, region_id in enumerate(plan, start=1):
         pid = f"PF_{i:04d}"
+        if resume and _patient_is_complete(out_root / pid, expected_slices):
+            skipped.append((i, region_id, pid))
+        else:
+            todo.append((i, region_id, pid))
+
+    if skipped:
+        print(f"[gen] resume: skipping {len(skipped)} already-complete patients")
+
+    if not todo:
+        print(f"[gen] all {n} patients already on disk; nothing to do")
+        return [{"patient_id": pid, "region": "plain" if rid == 0 else "hilly",
+                 "dicom_dir": str(out_root / pid / "DICOM"),
+                 "n_slices": expected_slices} for _, rid, pid in skipped]
+
+    cvae, unet, sched, device = load_generators(cfg)
+
+    summaries = [{"patient_id": pid, "region": "plain" if rid == 0 else "hilly",
+                  "dicom_dir": str(out_root / pid / "DICOM"),
+                  "n_slices": expected_slices} for _, rid, pid in skipped]
+    patient_bar = pbar(todo, total=len(todo), desc="Generating patients", unit="pt")
+    for i, region_id, pid in patient_bar:
         seed = int(gcfg["seed"]) + i
         patient_bar.set_postfix(now=pid, region="plain" if region_id == 0 else "hilly")
 
