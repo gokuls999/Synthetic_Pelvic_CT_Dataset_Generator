@@ -30,9 +30,10 @@ function Write-Log($msg) {
 Write-Log "waiting for dashboard at $dashboardUrl (up to $waitSeconds s)"
 $deadline = (Get-Date).AddSeconds($waitSeconds)
 $found = $false
+$stateUrl = "${dashboardUrl}api/state"
 while ((Get-Date) -lt $deadline) {
     try {
-        $r = Invoke-WebRequest -Uri "$dashboardUrl`api/state" -TimeoutSec 2 -UseBasicParsing
+        $r = Invoke-WebRequest -Uri $stateUrl -TimeoutSec 2 -UseBasicParsing
         if ($r.StatusCode -eq 200) {
             $found = $true
             break
