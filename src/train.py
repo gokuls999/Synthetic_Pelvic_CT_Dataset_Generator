@@ -64,18 +64,39 @@ def train_cvae(cfg: dict):
         opt = torch.optim.AdamW(model.parameters(), lr=tcfg["lr"])
         scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda" and cfg["training"]["mixed_precision"]))
 
-    # Resume from the last saved cvae_epochN.pt if --resume is set in cfg.
-    # `start_epoch` is the next epoch index to train (0-based), so e.g. if
-    # we resume from cvae_epoch1.pt we start training at epoch index 1 = "epoch 2".
+    # Resume logic:
+    # * highest cvae_epochN.pt -> start from epoch N+1 (clean resume)
+    # * cvae_latest.pt newer than that -> mid-epoch intra-save snapshot, load
+    #   its weights and restart the in-progress epoch from batch 0 (warm start)
     start_epoch = 0
     if cfg["training"].get("resume", False):
         existing = sorted(ckpt_dir.glob("cvae_epoch*.pt"),
                           key=lambda p: int(p.stem.replace("cvae_epoch", "")))
+        latest = ckpt_dir / "cvae_latest.pt"
         if existing:
             last = existing[-1]
-            with Spinner(f"Resuming CVAE from {last.name}"):
-                model.load_state_dict(torch.load(last, map_location=device)["model"])
-            start_epoch = int(last.stem.replace("cvae_epoch", ""))
+            last_n = int(last.stem.replace("cvae_epoch", ""))
+            if latest.exists() and latest.stat().st_mtime > last.stat().st_mtime:
+                # Mid-epoch intra-save is newer than the last completed epoch.
+                # Use it as warm weights and restart the in-progress epoch.
+                with Spinner(f"Resuming CVAE from mid-epoch snapshot (warm)"):
+                    state = torch.load(latest, map_location=device)
+                    model.load_state_dict(state["model"])
+                    in_prog = int(state.get("epoch_in_progress", last_n))
+                    start_epoch = in_prog
+                print(f"[train] mid-epoch snapshot found: restarting epoch "
+                      f"{start_epoch + 1} from batch 0 with warm weights")
+            else:
+                with Spinner(f"Resuming CVAE from {last.name}"):
+                    model.load_state_dict(torch.load(last, map_location=device)["model"])
+                start_epoch = last_n
+        elif latest.exists():
+            # Only a mid-epoch snapshot, no completed epoch yet.
+            with Spinner("Resuming CVAE from mid-epoch snapshot (warm, no completed epoch)"):
+                state = torch.load(latest, map_location=device)
+                model.load_state_dict(state["model"])
+                start_epoch = int(state.get("epoch_in_progress", 0))
+            print(f"[train] warm start from mid-epoch snapshot of epoch {start_epoch + 1}")
 
     epochs = 1 if smoke else tcfg["epochs"]
     accum = tcfg["grad_accum"]
@@ -84,6 +105,7 @@ def train_cvae(cfg: dict):
     loss_log = LossLogger(ckpt_dir / "logs" / "cvae_loss.csv",
                           fields=["loss", "rec", "kl"])
     sample_batch = next(iter(loader))                        # frozen batch for visual progress
+    intra_save_every = int(cfg["training"].get("intra_save_every_batches", 0))
     epoch_bar = pbar(range(start_epoch, epochs), desc="CVAE epochs", unit="epoch")
     for epoch in epoch_bar:
         model.train()
@@ -122,6 +144,15 @@ def train_cvae(cfg: dict):
             iter_bar.set_postfix(loss=f"{running['loss']/running['n']:.3f}",
                                  rec=f"{running['rec']/running['n']:.3f}",
                                  kl=f"{running['kl']/running['n']:.2f}")
+            # Intra-epoch checkpoint: write cvae_latest.pt every N batches so a
+            # mid-epoch crash only loses N batches of work (~30 min @ N=500).
+            if intra_save_every and (i + 1) % intra_save_every == 0:
+                torch.save({
+                    "model": model.state_dict(),
+                    "cfg": mcfg,
+                    "epoch_in_progress": epoch,
+                    "step_in_epoch": i + 1,
+                }, ckpt_dir / "cvae_latest.pt")
             if smoke and i >= 4:
                 break
 
@@ -192,19 +223,41 @@ def train_diffusion(cfg: dict, cvae_ckpt: str | None = None):
         scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda" and cfg["training"]["mixed_precision"]))
         ema = _EMA(unet, decay=tcfg["ema_decay"])
 
-    # Resume from last saved diffusion_epochN.pt if requested.
+    # Resume:
+    # * highest diffusion_epochN.pt -> start from epoch N+1 (clean resume)
+    # * diffusion_latest.pt newer than that -> mid-epoch intra-save -> warm restart
     start_epoch = 0
     if cfg["training"].get("resume", False):
         existing = sorted(ckpt_dir.glob("diffusion_epoch*.pt"),
                           key=lambda p: int(p.stem.replace("diffusion_epoch", "")))
+        latest = ckpt_dir / "diffusion_latest.pt"
         if existing:
             last = existing[-1]
-            with Spinner(f"Resuming diffusion from {last.name}"):
-                state = torch.load(last, map_location=device)
+            last_n = int(last.stem.replace("diffusion_epoch", ""))
+            if latest.exists() and latest.stat().st_mtime > last.stat().st_mtime:
+                with Spinner("Resuming diffusion from mid-epoch snapshot (warm)"):
+                    state = torch.load(latest, map_location=device)
+                    unet.load_state_dict(state["model"])
+                    if "ema" in state:
+                        ema.shadow.load_state_dict(state["ema"])
+                    start_epoch = int(state.get("epoch_in_progress", last_n))
+                print(f"[train] mid-epoch snapshot found: restarting diffusion epoch "
+                      f"{start_epoch + 1} from batch 0 with warm weights")
+            else:
+                with Spinner(f"Resuming diffusion from {last.name}"):
+                    state = torch.load(last, map_location=device)
+                    unet.load_state_dict(state["model"])
+                    if "ema" in state:
+                        ema.shadow.load_state_dict(state["ema"])
+                start_epoch = last_n
+        elif latest.exists():
+            with Spinner("Resuming diffusion from mid-epoch snapshot (warm, no completed epoch)"):
+                state = torch.load(latest, map_location=device)
                 unet.load_state_dict(state["model"])
                 if "ema" in state:
                     ema.shadow.load_state_dict(state["ema"])
-            start_epoch = int(last.stem.replace("diffusion_epoch", ""))
+                start_epoch = int(state.get("epoch_in_progress", 0))
+            print(f"[train] warm start from mid-epoch snapshot of epoch {start_epoch + 1}")
 
     loader = _make_loader(cfg, tcfg["batch_size"])
 
@@ -213,6 +266,7 @@ def train_diffusion(cfg: dict, cvae_ckpt: str | None = None):
     T = mcfg["timesteps"]
     preview_dir = ckpt_dir / "preview" / "diffusion"
     loss_log = LossLogger(ckpt_dir / "logs" / "diffusion_loss.csv", fields=["loss"])
+    intra_save_every = int(cfg["training"].get("intra_save_every_batches", 0))
     epoch_bar = pbar(range(start_epoch, epochs), desc="Diffusion epochs", unit="epoch")
     for epoch in epoch_bar:
         unet.train()
@@ -256,6 +310,15 @@ def train_diffusion(cfg: dict, cvae_ckpt: str | None = None):
             running["loss"] += float(loss.detach()) * accum * x.size(0)
             running["n"] += x.size(0)
             iter_bar.set_postfix(loss=f"{running['loss']/running['n']:.4f}")
+            # Intra-epoch checkpoint (see CVAE comment above).
+            if intra_save_every and (i + 1) % intra_save_every == 0:
+                torch.save({
+                    "model": unet.state_dict(),
+                    "ema": ema.shadow.state_dict(),
+                    "cfg": mcfg,
+                    "epoch_in_progress": epoch,
+                    "step_in_epoch": i + 1,
+                }, ckpt_dir / "diffusion_latest.pt")
             if smoke and i >= 4:
                 break
 

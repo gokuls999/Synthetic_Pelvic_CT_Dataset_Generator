@@ -79,6 +79,13 @@ training:
   # Turing/Ampere/Ada (RTX 20xx+) for real fp16 speed.
   mixed_precision: false
   num_workers: 2
+  # Intra-epoch checkpoint frequency: save *_latest.pt every N batches so
+  # a mid-epoch crash only loses up to N batches of work (vs an entire
+  # ~8h epoch). 500 is roughly every 30 min on a 1080 Ti at the 64-latent.
+  # Resume code loads the mid-epoch snapshot if it's newer than the last
+  # per-epoch checkpoint, and restarts the in-progress epoch from batch 0
+  # with the warm weights -- much faster than from cold init.
+  intra_save_every_batches: 500
   cvae:
     batch_size: 16
     lr: 2.0e-4
