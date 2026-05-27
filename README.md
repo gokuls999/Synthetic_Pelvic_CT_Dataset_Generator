@@ -120,6 +120,45 @@ Each DICOM series:
 * `RescaleSlope=1, RescaleIntercept=-1024` so stored pixels are `HU + 1024`
 * loads directly in 3D Slicer as a 3D volume.
 
+## Survive power cuts / reboots (long unattended runs)
+
+Multi-day runs (the `overnight` preset is ~12 days on a 1080 Ti) need to
+survive holidays and power outages. Two layers of protection:
+
+**1. Resume-on-restart is the default.** Every stage already picks up where
+it stopped:
+- training restores from the highest-numbered `*_epochN.pt` checkpoint
+- generation skips patient dirs that already have full DICOM + metadata.json
+- validation / anatomy_validate just rerun (cheap)
+
+If a run is interrupted, just rerun the same command — no flags needed.
+Use `--restart-fresh` if you ever want to ignore on-disk state and start clean.
+
+**2. Auto-launch on Windows boot.** A scheduled task can fire `autostart.ps1`
+at every system boot (and at user logon) so the pipeline relaunches itself
+after a power cycle without you typing anything. Install once, in an
+**ELEVATED PowerShell** (right-click -> Run as administrator):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1
+```
+
+The wrapper script:
+- Skips if `synthetic_dataset/anatomy_report.json` shows the run is already done
+- Skips if a pipeline is already responding on http://127.0.0.1:8765/
+- Otherwise waits 60s for system services then launches the pipeline
+- Logs each boot to `logs/autostart_YYYYMMDD_HHMMSS.log`
+
+To remove the task when training is done:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\uninstall_autostart.ps1
+```
+
+To test the wrapper without rebooting:
+```powershell
+Start-ScheduledTask -TaskName 'PelvicCT-Generator-Pipeline'
+```
+
 ## Anatomy validation (optional, post-generation)
 
 `scripts/validate.py` only checks DICOM structure (UIDs, Z monotonicity, HU
