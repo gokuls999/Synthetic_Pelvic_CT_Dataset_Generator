@@ -51,13 +51,19 @@ PRESETS = {
     },
     "overnight": {
         # Sized for the deeper-latent CVAE (64x64) introduced after the first
-        # overnight run produced 0/50 anatomy pass. 20 + 20 epochs is roughly
-        # 3-4 days on a 1080 Ti at 4x more compute per step than the old config.
+        # overnight run produced 0/50 anatomy pass. Measured ~8h per CVAE
+        # epoch on a 1080 Ti at the new 64x64x4 latent (vs ~50 min at the
+        # old 32x32x4) -- 4x more compute per step + 4x more activations.
+        #   20 CVAE epochs ~ 160 h
+        # + 20 diff epochs ~ 120 h
+        # + gen + validate ~   1 h
+        # = ~280 h (~12 days). The 80h initial estimate was a guess from
+        # the old smaller-latent timings; corrected here.
         "max_per_dataset": 50,
         "cvae_epochs": 20,
         "diff_epochs": 20,
         "num_patients": 50,
-        "expected_total_h": 80.0,
+        "expected_total_h": 280.0,
     },
     "full": {
         "max_per_dataset": None,
