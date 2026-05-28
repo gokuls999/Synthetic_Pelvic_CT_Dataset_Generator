@@ -91,17 +91,100 @@ class ProgressState:
         # Set via start_server(expected_total_s=...). The dashboard renders
         # elapsed / expected / remaining in the header.
         self.expected_total_s: Optional[float] = None
+        # Config snapshot (paths.checkpoints_dir + training epoch counts) used
+        # by _compute_dynamic_remaining_s to give an ETA based on REAL on-disk
+        # checkpoint mtimes rather than the preset's static guess. Set via
+        # start_server(cfg=...).
+        self.cfg: Optional[dict] = None
+
+    def _compute_dynamic_remaining_s(self) -> Optional[float]:
+        """ETA based on actual per-epoch time measured from checkpoint mtimes.
+
+        Survives reboots because it reads mtimes of cvae_epochN.pt /
+        diffusion_epochN.pt -- not the in-process elapsed counter.
+        Returns None if there isn't enough data yet (no completed epoch).
+        """
+        if not self.cfg:
+            return None
+        try:
+            from pathlib import Path
+            ckpt_dir = Path(self.cfg["paths"]["checkpoints_dir"])
+            if not ckpt_dir.is_dir():
+                return None
+            cvae_total = int(self.cfg["training"]["cvae"]["epochs"])
+            diff_total = int(self.cfg["training"]["diffusion"]["epochs"])
+
+            cvae_files = sorted(ckpt_dir.glob("cvae_epoch*.pt"),
+                                key=lambda p: int(p.stem.replace("cvae_epoch", "")))
+            diff_files = sorted(ckpt_dir.glob("diffusion_epoch*.pt"),
+                                key=lambda p: int(p.stem.replace("diffusion_epoch", "")))
+            cvae_done = len(cvae_files)
+            diff_done = len(diff_files)
+
+            def _mean_gap(files):
+                if len(files) < 2:
+                    return None
+                mtimes = sorted(f.stat().st_mtime for f in files)
+                gaps = [mtimes[i+1] - mtimes[i] for i in range(len(mtimes)-1)]
+                return sum(gaps) / len(gaps)
+
+            cvae_per_epoch_s = _mean_gap(cvae_files)
+            diff_per_epoch_s = _mean_gap(diff_files)
+            # If only one CVAE epoch is done, use (mtime - started_at) as a proxy.
+            if cvae_per_epoch_s is None and cvae_done == 1:
+                est = cvae_files[0].stat().st_mtime - self.started_at
+                if est > 0:
+                    cvae_per_epoch_s = est
+            # Fall back: assume diffusion takes as long as CVAE (rough).
+            if diff_per_epoch_s is None:
+                diff_per_epoch_s = cvae_per_epoch_s
+
+            if cvae_per_epoch_s is None:
+                return None
+
+            # Active in-progress fraction
+            active = self.active_id
+            cvae_remaining_epochs = max(0, cvae_total - cvae_done)
+            diff_remaining_epochs = max(0, diff_total - diff_done)
+            total_s = 0.0
+
+            if active == "train_cvae":
+                stage = self._index["train_cvae"]
+                in_prog = (stage.current / stage.total) if stage.total > 0 else 0.0
+                total_s += cvae_per_epoch_s * max(0.0, 1.0 - in_prog)
+                total_s += cvae_per_epoch_s * max(0, cvae_remaining_epochs - 1)
+                total_s += diff_per_epoch_s * diff_remaining_epochs if diff_per_epoch_s else 0.0
+            elif active == "train_diffusion":
+                stage = self._index["train_diffusion"]
+                in_prog = (stage.current / stage.total) if stage.total > 0 else 0.0
+                total_s += diff_per_epoch_s * max(0.0, 1.0 - in_prog) if diff_per_epoch_s else 0.0
+                total_s += diff_per_epoch_s * max(0, diff_remaining_epochs - 1) if diff_per_epoch_s else 0.0
+            else:
+                # Outside training (generate/validate/anatomy_validate): tiny
+                # compared to training, fall back to the static estimate.
+                return None
+
+            return total_s
+        except Exception:
+            return None
 
     def snapshot(self) -> dict:
         with self.lock:
             elapsed = time.time() - self.started_at
-            remaining_s = None
+            static_remaining_s = None
             if self.expected_total_s is not None:
-                remaining_s = max(0.0, self.expected_total_s - elapsed)
+                static_remaining_s = max(0.0, self.expected_total_s - elapsed)
+            dynamic_remaining_s = self._compute_dynamic_remaining_s()
+            # Prefer the dynamic ETA when it's available -- it knows about
+            # epochs trained before this Python process started (which the
+            # static elapsed-from-process-start can't see).
+            remaining_s = dynamic_remaining_s if dynamic_remaining_s is not None else static_remaining_s
             return {
                 "started_at": self.started_at,
                 "elapsed_s": elapsed,
                 "expected_total_s": self.expected_total_s,
+                "static_remaining_s": static_remaining_s,
+                "dynamic_remaining_s": dynamic_remaining_s,
                 "remaining_s": remaining_s,
                 "run_label": self.run_label,
                 "active_id": self.active_id,
@@ -355,13 +438,19 @@ function render(state) {
   document.getElementById("elapsed").textContent = fmtDuration(state.elapsed_s);
   document.getElementById("run-label").textContent = state.run_label || "";
 
-  // Pipeline-level ETA (if start_server got expected_total_s)
+  // Pipeline-level ETA. Prefer the dynamic estimate (reads checkpoint mtimes,
+  // survives reboots) over the preset's static guess. Tag the source so the
+  // user knows whether it's a live measurement or a preset prediction.
   const etaBlock = document.getElementById("eta-block");
-  if (state.expected_total_s) {
+  if (state.expected_total_s || state.dynamic_remaining_s !== null) {
     etaBlock.style.display = "inline";
-    document.getElementById("expected").textContent = fmtDuration(state.expected_total_s);
-    document.getElementById("remaining").textContent = fmtDuration(state.remaining_s || 0);
-    const finishEpoch = state.started_at + state.expected_total_s;
+    const remSec = state.remaining_s || 0;
+    const sourceTag = (state.dynamic_remaining_s !== null) ? " (live)" : " (preset)";
+    document.getElementById("expected").textContent = fmtDuration(state.expected_total_s || 0);
+    document.getElementById("remaining").textContent = fmtDuration(remSec) + sourceTag;
+    // Finish clock is computed from NOW + remaining, not started_at + expected.
+    // That way dynamic ETA's finish time is correct.
+    const finishEpoch = (Date.now() / 1000) + remSec;
     document.getElementById("eta-time").textContent = fmtClockTime(finishEpoch);
   } else {
     etaBlock.style.display = "none";
@@ -501,7 +590,8 @@ def _find_free_port(preferred: int) -> int:
 
 def start_server(port: int = 8765, open_browser: bool = True,
                  run_label: str = "",
-                 expected_total_s: Optional[float] = None) -> str:
+                 expected_total_s: Optional[float] = None,
+                 cfg: Optional[dict] = None) -> str:
     """Start the dashboard HTTP server on a background thread. Returns the URL."""
     global _server
     if _server is not None:
@@ -515,6 +605,7 @@ def start_server(port: int = 8765, open_browser: bool = True,
     _state.started_at = time.time()
     _state.run_label = run_label
     _state.expected_total_s = expected_total_s
+    _state.cfg = cfg
     log_msg(f"dashboard up at {url}")
     if expected_total_s:
         hours = expected_total_s / 3600.0

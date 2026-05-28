@@ -130,7 +130,8 @@ def main():
              f"patients={preset['num_patients']}")
     expected_s = preset.get("expected_total_h", 0) * 3600.0 or None
     url = wp.start_server(port=args.port, open_browser=not args.no_browser,
-                          run_label=label, expected_total_s=expected_s)
+                          run_label=label, expected_total_s=expected_s,
+                          cfg=cfg)
 
     print()
     print("=" * 72)
