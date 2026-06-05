@@ -166,6 +166,50 @@ def mask_stats(mask: np.ndarray, name: str) -> Optional[MaskStats]:
     )
 
 
+def pelvic_z_range_from_masks(masks: dict[str, np.ndarray],
+                              margin_voxels: int = 6,
+                              fallback: tuple[int, int] | None = None
+                              ) -> tuple[int, int]:
+    """Return (z_top, z_bot) defining the pelvic-only Z extent from TS masks.
+
+    Uses the union of sacrum + hip_left + hip_right as the bone scaffold of
+    the pelvis. The pelvic Z range is the min..max Z over those voxels,
+    plus a small margin.
+
+    This corrects the pre-existing preprocessing bug where pelvic_z_range()
+    in src/preprocessing.py kept the whole spine region (thorax + abdomen +
+    pelvis) for whole-trunk source CTs, leaving every cache volume
+    contaminated with abdominal anatomy.
+
+    Returns `fallback` (or (0, Z) if not supplied) if no pelvic bone mask
+    has any voxels.
+    """
+    bone = None
+    for name in ("sacrum", "hip_left", "hip_right"):
+        m = masks.get(name)
+        if m is None or not m.any():
+            continue
+        bone = m if bone is None else (bone | m)
+    if bone is None or not bone.any():
+        if fallback is not None:
+            return fallback
+        Z = 0
+        for m in masks.values():
+            Z = max(Z, m.shape[0])
+        return (0, Z)
+
+    coords_z = np.where(bone.any(axis=(1, 2)))[0]
+    z_top = int(coords_z.min()) - margin_voxels
+    z_bot = int(coords_z.max()) + 1 + margin_voxels
+    z_top = max(0, z_top)
+    z_bot = min(bone.shape[0], z_bot)
+    if z_bot - z_top < 8:           # sanity: must be at least 8 slices
+        if fallback is not None:
+            return fallback
+        return (0, bone.shape[0])
+    return (z_top, z_bot)
+
+
 def rectum_subregion(colon_mask: np.ndarray, frac: float = 0.66) -> np.ndarray:
     """Rectum = inferior portion of the colon. In our cached pelvic volumes
     'inferior' = larger Z (DICOM caudal). Take the lowest ~1/3 of colon voxels

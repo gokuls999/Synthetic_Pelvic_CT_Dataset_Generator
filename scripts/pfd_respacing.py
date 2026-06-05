@@ -35,6 +35,7 @@ from src.generate import SyntheticVolume
 from src.dicom_builder import write_dicom_series
 from src.pfd_segmentation import (
     load_cached_masks, rectum_subregion, mask_stats, PFD_ROI_SUBSET,
+    pelvic_z_range_from_masks,
 )
 from src.pfd_deformation import (
     build_pattern_from_masks, build_displacement_field, apply_deformation,
@@ -133,6 +134,17 @@ def main():
             sz, sy, sx = cache_spacing
 
             masks = load_cached_masks(cache_root, dataset, uid, PFD_ROI_SUBSET)
+
+            # TS-anchored pelvic crop -- removes abdominal anatomy that the
+            # preprocessing pelvic_z_range() heuristic let through. Use the
+            # union of sacrum + hip masks to define z_top..z_bot.
+            z_top, z_bot = pelvic_z_range_from_masks(masks, margin_voxels=6,
+                                                    fallback=(0, Z))
+            if z_bot - z_top < Z:
+                vol_norm = vol_norm[z_top:z_bot]
+                masks = {k: m[z_top:z_bot] for k, m in masks.items()}
+                Z = vol_norm.shape[0]
+
             if "colon" in masks and masks["colon"].any():
                 rectum_mask = rectum_subregion(masks["colon"], frac=0.66)
                 masks["rectum"] = rectum_mask
@@ -142,7 +154,8 @@ def main():
                 if st is not None:
                     stats[name] = st
 
-            # Pattern + deformation
+            # Pattern + deformation -- rebuilt on the cropped grid so blob
+            # centers are in the right place after the crop.
             p_obj = build_pattern_from_masks(pattern, stats, severity=severity)
             field = build_displacement_field((Z, H, W), p_obj.blobs)
             deformed = apply_deformation(vol_norm, field, order=1, cval=-1.0)
