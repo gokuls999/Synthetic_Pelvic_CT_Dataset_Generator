@@ -156,9 +156,12 @@ def main():
 
     hu_min = float(cfg["preprocess"]["hu_min"])
     hu_max = float(cfg["preprocess"]["hu_max"])
-    spacing = (float(cfg["output"]["slice_thickness_mm"]),
-               float(cfg["output"]["pixel_spacing_mm"][0]),
-               float(cfg["output"]["pixel_spacing_mm"][1]))
+    # NB: spacing is read per-patient from each cache .npz so the DICOM
+    # headers match the actual source CT (different volumes have different
+    # in-plane spacing and slice thickness). Falling back to the constants
+    # in cfg["output"] -- as we did at first -- produced DICOM headers that
+    # claimed wrong physical extents, making 3D Slicer render elongated
+    # zombies.
 
     # ---- Stage 1: plan ----
     wp.set_stage("plan", postfix="building 50-patient roster")
@@ -212,7 +215,10 @@ def main():
             with np.load(r["cache_path"], allow_pickle=True) as npz:
                 vol_norm = np.asarray(npz["slices"]).astype(np.float32)
                 src_path = Path(str(npz["source"]))
+                cache_spacing = tuple(float(x)
+                                      for x in np.asarray(npz["spacing"]).tolist())
             Z, H, W = vol_norm.shape
+            spacing = cache_spacing       # (sz, sy, sx) for DICOM headers
 
             if not src_path.exists():
                 wp.log_msg(f"  [{idx}] MISS: original DICOM not at {src_path}")

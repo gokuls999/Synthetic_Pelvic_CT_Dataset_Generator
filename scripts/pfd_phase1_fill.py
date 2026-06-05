@@ -168,9 +168,8 @@ def main():
 
     hu_min = float(cfg["preprocess"]["hu_min"])
     hu_max = float(cfg["preprocess"]["hu_max"])
-    spacing = (float(cfg["output"]["slice_thickness_mm"]),
-               float(cfg["output"]["pixel_spacing_mm"][0]),
-               float(cfg["output"]["pixel_spacing_mm"][1]))
+    # spacing is read per-patient from each cache .npz inside the loop --
+    # see pfd_phase1_full.py for why the cfg defaults are wrong for hybrid.
 
     wp.set_stage("process", total=len(missing), postfix="starting")
     completed = []
@@ -198,7 +197,10 @@ def main():
                 with np.load(pick["cache_path"], allow_pickle=True) as npz:
                     vol_norm = np.asarray(npz["slices"]).astype(np.float32)
                     src_path = Path(str(npz["source"]))
+                    cache_spacing = tuple(float(x)
+                                          for x in np.asarray(npz["spacing"]).tolist())
                 Z, H, W = vol_norm.shape
+                spacing = cache_spacing
                 if not src_path.exists():
                     wp.log_msg(f"    skip: original DICOM missing at {src_path}")
                     continue
