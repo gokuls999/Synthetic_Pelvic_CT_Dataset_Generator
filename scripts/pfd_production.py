@@ -38,7 +38,13 @@ from src.pfd_segmentation import (
 from src.pfd_deformation import (
     build_pattern_from_masks, build_displacement_field, apply_deformation,
 )
+from src.keep_awake import KeepAwake
 from src import web_progress as wp
+
+
+class _NullCtx:
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
 
 
 # ----- Default pattern mix (matches the 50-patient pilot proportions) -----
@@ -194,6 +200,9 @@ def main():
     ap.add_argument("--port", type=int, default=8766)
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--skip-done", action="store_true")
+    ap.add_argument("--allow-sleep", action="store_true",
+                    help="Allow the OS to sleep during the run (default: prevent sleep "
+                         "for resilience over the multi-hour run).")
     args = ap.parse_args()
 
     if args.n_plain is None and args.n_hilly is None:
@@ -254,12 +263,25 @@ def main():
         wp.log_msg(f"  bucket {k}: {c} patients")
     wp.finish_stage("done")
 
-    # --- Process ---
+    # --- Mark "production in progress" so autostart.ps1 can resume on cut ---
+    progress_marker = out_root / ".production_in_progress"
+    progress_marker.write_text(json.dumps({
+        "n_planned": len(roster), "n_plain": args.n_plain,
+        "n_hilly": args.n_hilly, "out_root": str(out_root),
+        "started_at": time.time(),
+    }, indent=2))
+
+    # --- Process (KeepAwake unless --allow-sleep) ---
     wp.set_stage("process", total=len(roster), postfix="starting")
+    if not args.allow_sleep:
+        wp.log_msg("keep-awake enabled (system sleep blocked during run)")
+    keep_awake = KeepAwake() if not args.allow_sleep else _NullCtx()
     summary = []
     failed = []
     t_run = time.time()
 
+    # Enter KeepAwake; plain enter/exit, cleanup at the end of main().
+    keep_awake.__enter__()
     for idx, r in enumerate(roster, start=1):
         pdir = out_root / r["patient_id"]
 
@@ -427,6 +449,19 @@ def main():
     print(f"  Output root: {out_root}")
     print(f"  Summary:     {summary_path}")
     print("=" * 72)
+    # Mark run as complete; autostart.ps1 watches this marker to know when
+    # production is done so it stops resuming on subsequent boots.
+    try:
+        progress_marker.unlink(missing_ok=True)
+    except Exception:
+        pass
+    # KeepAwake cleanup. (No try/finally because Python keep_awake exit
+    # is best-effort; if the process is power-killed, the next KeepAwake
+    # will re-zero the standby settings anyway.)
+    try:
+        keep_awake.__exit__(None, None, None)
+    except Exception:
+        pass
     wp.stop_server(grace_s=120.0)
 
 

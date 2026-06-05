@@ -51,7 +51,7 @@ if (Test-Path $doneMarker) {
     }
 }
 
-# --- Guard 2: pipeline already running (dashboard answers) ---------------
+# --- Guard 2: pipeline already running (training dashboard on 8765) -----
 try {
     $r = Invoke-WebRequest -Uri "http://127.0.0.1:$dashboardPort/api/state" -TimeoutSec 2 -UseBasicParsing
     if ($r.StatusCode -eq 200) {
@@ -60,16 +60,40 @@ try {
     }
 } catch { }
 
+# --- Guard 3: production-scale PFD run in progress (dashboard on 8766) --
+try {
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8766/api/state" -TimeoutSec 2 -UseBasicParsing
+    if ($r.StatusCode -eq 200) {
+        Write-Log "PFD production dashboard responding on port 8766; another run is live. Exiting."
+        exit 0
+    }
+} catch { }
+
 # --- Wait for system to settle (drivers, GPU, network) -------------------
 Write-Log "waiting $bootSettleSec s for system services"
 Start-Sleep -Seconds $bootSettleSec
 
-# --- Launch the pipeline -------------------------------------------------
 Set-Location $projectDir
 Write-Log "cwd: $projectDir"
-Write-Log "exec: $pythonExe scripts\run_all.py --preset $preset --device cuda --skip cache,labels --no-browser"
-& $pythonExe scripts\run_all.py --preset $preset --device cuda --skip cache,labels --no-browser 2>&1 |
-    Tee-Object -FilePath $logFile -Append
+
+# --- Pick which pipeline to resume --------------------------------------
+# Priority: if a PFD production run was in progress, resume IT (don't fall
+# back to run_all.py which would try to regenerate the deleted zombie
+# PF_* patients). The marker is written by scripts/pfd_production.py at the
+# start of the run and removed when it finishes.
+$prodRoot   = Join-Path $projectDir 'synthetic_dataset\production_375'
+$prodMarker = Join-Path $prodRoot '.production_in_progress'
+
+if (Test-Path $prodMarker) {
+    Write-Log "PFD production-in-progress marker found at $prodMarker; resuming production run"
+    Write-Log "exec: $pythonExe scripts\pfd_production.py --num-patients 375 --n-plain 188 --n-hilly 187 --out synthetic_dataset/production_375 --skip-done --no-browser"
+    & $pythonExe scripts\pfd_production.py --num-patients 375 --n-plain 188 --n-hilly 187 --out synthetic_dataset/production_375 --skip-done --no-browser 2>&1 |
+        Tee-Object -FilePath $logFile -Append
+} else {
+    Write-Log "exec: $pythonExe scripts\run_all.py --preset $preset --device cuda --skip cache,labels --no-browser"
+    & $pythonExe scripts\run_all.py --preset $preset --device cuda --skip cache,labels --no-browser 2>&1 |
+        Tee-Object -FilePath $logFile -Append
+}
 
 $rc = $LASTEXITCODE
 Write-Log "pipeline process exited with code $rc"
