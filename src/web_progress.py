@@ -213,6 +213,16 @@ def set_run_label(label: str) -> None:
         _state.run_label = label
 
 
+def set_stages(stage_defs: list[tuple[str, str]]) -> None:
+    """Replace the stage list. Call BEFORE start_server. Used by side-pipelines
+    (e.g. the PFD POC) that want a parallel dashboard with their own stages
+    instead of the main training stages."""
+    with _state.lock:
+        _state.stages = [Stage(id=sid, name=sname) for sid, sname in stage_defs]
+        _state._index = {s.id: s for s in _state.stages}
+        _state.active_id = None
+
+
 def set_stage(stage_id: str, total: int = 0, postfix: str = "") -> None:
     """Mark a stage as running and reset its counters."""
     with _state.lock:
