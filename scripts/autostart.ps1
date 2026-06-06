@@ -81,13 +81,13 @@ Write-Log "cwd: $projectDir"
 # back to run_all.py which would try to regenerate the deleted zombie
 # PF_* patients). The marker is written by scripts/pfd_production.py at the
 # start of the run and removed when it finishes.
-$prodRoot   = Join-Path $projectDir 'synthetic_dataset\production_375'
+$prodRoot   = Join-Path $projectDir 'synthetic_dataset\production_350'
 $prodMarker = Join-Path $prodRoot '.production_in_progress'
 
 if (Test-Path $prodMarker) {
-    Write-Log "PFD production-in-progress marker found at $prodMarker; resuming production run"
-    Write-Log "exec: $pythonExe scripts\pfd_production.py --num-patients 375 --n-plain 188 --n-hilly 187 --out synthetic_dataset/production_375 --skip-done --no-browser"
-    & $pythonExe scripts\pfd_production.py --num-patients 375 --n-plain 188 --n-hilly 187 --out synthetic_dataset/production_375 --skip-done --no-browser 2>&1 |
+    Write-Log "PFD production-in-progress marker found at $prodMarker; resuming production v2 run"
+    Write-Log "exec: $pythonExe scripts\pfd_production_v2.py --num-patients 350 --n-plain 175 --n-hilly 175 --out synthetic_dataset/production_350 --skip-done --no-browser"
+    & $pythonExe scripts\pfd_production_v2.py --num-patients 350 --n-plain 175 --n-hilly 175 --out synthetic_dataset/production_350 --skip-done --no-browser 2>&1 |
         Tee-Object -FilePath $logFile -Append
 } else {
     Write-Log "exec: $pythonExe scripts\run_all.py --preset $preset --device cuda --skip cache,labels --no-browser"
