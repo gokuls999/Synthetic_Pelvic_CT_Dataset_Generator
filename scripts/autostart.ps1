@@ -90,9 +90,13 @@ if (Test-Path $prodMarker) {
     & $pythonExe scripts\pfd_production_v2.py --num-patients 350 --n-plain 175 --n-hilly 175 --out synthetic_dataset/production_350 --skip-done --no-browser 2>&1 |
         Tee-Object -FilePath $logFile -Append
 } else {
-    Write-Log "exec: $pythonExe scripts\run_all.py --preset $preset --device cuda --skip cache,labels --no-browser"
-    & $pythonExe scripts\run_all.py --preset $preset --device cuda --skip cache,labels --no-browser 2>&1 |
-        Tee-Object -FilePath $logFile -Append
+    # Training is fully complete and the user explicitly does NOT want the
+    # zombie-quality PF_* generation pipeline to ever fire again. The only
+    # work autostart should ever launch is the hybrid PFD production. If the
+    # marker is gone, the production run is finished (or never started) and
+    # there is nothing here to do.
+    Write-Log "no .production_in_progress marker; nothing to resume (training is done, zombie generation is disabled)"
+    exit 0
 }
 
 $rc = $LASTEXITCODE
