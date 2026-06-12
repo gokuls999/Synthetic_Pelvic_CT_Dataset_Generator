@@ -32,10 +32,14 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
+import datetime
+import scipy.ndimage as _ndi
+
 from src.preprocessing import unwindow
 from src.generate import SyntheticVolume
 from src.dicom_builder import write_dicom_series
 from src.exports import write_png_jpg_metadata
+from src.patient_report import generate_clinical_metadata, write_patient_pdf
 from src.pfd_segmentation import (
     segment_original_volume, rectum_subregion, mask_stats,
     pelvic_z_range_from_masks, PFD_ROI_SUBSET,
@@ -190,6 +194,21 @@ def process_one(cfg: dict, cache_root: Path, out_root: Path,
         masks = {k: m[z_top:z_bot] for k, m in masks.items()}
     Z, H, W = vol_norm.shape
 
+    # --- Fix: center pelvis on bilateral X midline -------------------------
+    # Source CTs often have the patient off-center by up to ±30 px; the cache
+    # preserves that offset, making left/right hip bones appear asymmetric in
+    # the final 256×256 slices.  Rolling vol_norm and masks in X BEFORE stats
+    # and deformation ensures blob anchors are symmetric around the midline.
+    _hl = mask_stats(masks["hip_left"],  "hip_left")  if "hip_left"  in masks else None
+    _hr = mask_stats(masks["hip_right"], "hip_right") if "hip_right" in masks else None
+    if _hl is not None and _hr is not None:
+        midline_x = (_hl.center[2] + _hr.center[2]) / 2.0
+        offset_x  = int(round(W / 2.0 - midline_x))
+        offset_x  = max(-32, min(32, offset_x))   # cap at 32 px safety
+        if abs(offset_x) >= 2:
+            vol_norm = np.roll(vol_norm, offset_x, axis=2)
+            masks    = {k: np.roll(m, offset_x, axis=2) for k, m in masks.items()}
+
     if "colon" in masks and masks["colon"].any():
         rectum_mask = rectum_subregion(masks["colon"], frac=0.66)
         masks["rectum"] = rectum_mask
@@ -215,6 +234,16 @@ def process_one(cfg: dict, cache_root: Path, out_root: Path,
 
     vol_hu = np.clip(unwindow(deformed, hu_min, hu_max),
                      -1024.0, 3071.0).astype(np.int16)
+
+    # --- Fix elongated 3D: resample z to target slice thickness ---
+    sz_src, sy_src, sx_src = spacing
+    target_z_mm = float(cfg["output"].get("slice_thickness_mm", 1.5))
+    if abs(sz_src - target_z_mm) > 0.1:
+        zoom_z = sz_src / target_z_mm
+        vol_hu = _ndi.zoom(vol_hu.astype(np.float32),
+                           (zoom_z, 1.0, 1.0), order=1).astype(np.int16)
+        spacing = (target_z_mm, sy_src, sx_src)
+
     vol = SyntheticVolume(
         pixels_hu=vol_hu, spacing=spacing, region=severity,
         region_id=region_id, patient_id=patient_id, seed=int(patient_num),
@@ -257,6 +286,23 @@ def process_one(cfg: dict, cache_root: Path, out_root: Path,
         "pelvic_crop_z":           [int(z_top), int(z_bot), int(Z_orig)],
     })
     meta_path.write_text(json.dumps(meta, indent=2))
+
+    # --- Generate full clinical metadata + PDF data collection sheet ---
+    collection_date = datetime.date.today().isoformat()
+    clinical = generate_clinical_metadata(
+        patient_id=patient_id,
+        patient_num=patient_num,
+        pattern=p_obj.name,
+        severity=p_obj.severity,
+        region_id=region_id,
+        pfd_findings=p_obj.findings,
+        real_spacing_mm=list(spacing),
+        pelvic_crop_z=[int(z_top), int(z_bot), int(Z_orig)],
+        collection_date=collection_date,
+    )
+    clinical_path = pdir / "clinical_data.json"
+    clinical_path.write_text(json.dumps(clinical, indent=2))
+    write_patient_pdf(clinical, pdir / "patient_report.pdf")
 
     return {
         "ok": True, "p_obj": p_obj, "stats": stats, "spacing": spacing,

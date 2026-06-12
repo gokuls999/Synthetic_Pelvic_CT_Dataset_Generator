@@ -10,6 +10,7 @@ Pillow>=10.0
 pydicom>=2.4
 nibabel>=5.1
 SimpleITK>=2.3
+fpdf2>=2.7
 
 torch>=2.1
 torchvision>=0.16

@@ -37,6 +37,22 @@ PFD_ROI_SUBSET = [
     "hip_right",
 ]
 
+# Extended subset for segmentation overlay generation (includes pelvic muscles).
+# TotalSegmentator total task (fast=True) includes all of these.
+# First run per source CT takes 5-10 min; subsequent runs are instant (cached).
+SEG_SUBSET = PFD_ROI_SUBSET + [
+    "femur_left",
+    "femur_right",
+    "gluteus_maximus_left",
+    "gluteus_maximus_right",
+    "gluteus_medius_left",
+    "gluteus_medius_right",
+    "gluteus_minimus_left",
+    "gluteus_minimus_right",
+    "iliopsoas_left",
+    "iliopsoas_right",
+]
+
 
 @dataclass
 class MaskStats:
