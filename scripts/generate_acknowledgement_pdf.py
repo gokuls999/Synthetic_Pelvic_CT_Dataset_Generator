@@ -136,9 +136,10 @@ def build():
     pdf.ln(1)
     para(pdf,
          "I hereby acknowledge that the research conducted by Mr. MUTHUKUMAR C using "
-         "this CT pelvimetry dataset is medically validated, clinically relevant, and "
-         "of significant academic and practical value to the field of pelvic floor "
-         "medicine in South India.")
+         "this CT pelvimetry dataset is medically validated and clinically sound, and "
+         "holds considerable scope for advancing future research in the field of pelvic "
+         "floor medicine, with broad academic relevance and meaningful potential for "
+         "wider clinical application in the years ahead.")
 
     # ── Signature block ────────────────────────────────────────────────────
     pdf.ln(1)

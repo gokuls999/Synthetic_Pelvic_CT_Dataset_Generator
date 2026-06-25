@@ -270,9 +270,10 @@ def build():
     for txt, bold in [
         ("I hereby acknowledge that the research conducted by ", False),
         ("Mr. MUTHUKUMAR C", True),
-        (" using this CT pelvimetry dataset is medically validated, clinically relevant, "
-         "and of significant academic and practical value to the field of pelvic floor "
-         "medicine in South India.", False),
+        (" using this CT pelvimetry dataset is medically validated and clinically sound, "
+         "and holds considerable scope for advancing future research in the field of "
+         "pelvic floor medicine, with broad academic relevance and meaningful potential "
+         "for wider clinical application in the years ahead.", False),
     ]:
         r = p_close.add_run(txt)
         r.font.name  = "Times New Roman"
