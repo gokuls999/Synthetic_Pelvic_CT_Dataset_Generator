@@ -147,18 +147,46 @@ def _load_mask_nifti(path: Path, ref_shape_zhw: tuple[int, int, int]) -> np.ndar
 # -------------------------------------------------------------------------
 
 def _run_ts(nifti_in: Path, out_dir: Path,
-            roi_subset: list[str], fast: bool = True) -> None:
+            roi_subset: list[str], fast: bool = True,
+            timeout_sec: int = 2700) -> None:
+    """Run TotalSegmentator with a hard timeout (default 45 min).
+    Raises TimeoutError if it doesn't finish in time.
+    """
     try:
         from totalsegmentator.python_api import totalsegmentator
     except ImportError as e:
         raise RuntimeError(
             "totalsegmentator not installed. Run: pip install totalsegmentator"
         ) from e
-    out_dir.mkdir(parents=True, exist_ok=True)
-    totalsegmentator(
-        input=str(nifti_in), output=str(out_dir),
-        roi_subset=roi_subset, fast=fast, ml=False, quiet=True,
-    )
+    import multiprocessing, queue
+
+    def _worker(result_q):
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            totalsegmentator(
+                input=str(nifti_in), output=str(out_dir),
+                roi_subset=roi_subset, fast=fast, ml=False, quiet=True,
+            )
+            result_q.put(("ok", None))
+        except Exception as exc:
+            result_q.put(("err", exc))
+
+    result_q = multiprocessing.Queue()
+    p = multiprocessing.Process(target=_worker, args=(result_q,))
+    p.start()
+    p.join(timeout_sec)
+    if p.is_alive():
+        p.terminate()
+        p.join(10)
+        if p.is_alive():
+            p.kill()
+        raise TimeoutError(
+            f"TotalSegmentator timed out after {timeout_sec//60} min on {nifti_in.name}"
+        )
+    if not result_q.empty():
+        status, exc = result_q.get_nowait()
+        if status == "err":
+            raise exc
 
 
 # -------------------------------------------------------------------------
