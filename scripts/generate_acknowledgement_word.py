@@ -24,27 +24,25 @@ THESIS = (
 )
 
 ITEMS = [
-    ("1. Clinical Validity",
-     "The bony pelvimetric and pelvic floor morphometric parameters derived from this CT "
-     "dataset are clinically accurate, anatomically sound, and consistent with established "
-     "radiological reference standards for the South Indian female population."),
+    ("1. Pelvimetric Accuracy",
+     "The bony pelvimetric and pelvic floor morphometric parameters derived from this "
+     "dataset conform to established radiological reference standards and are verified as "
+     "anatomically accurate across all measured planes."),
 
-    ("2. Medical Utility",
-     "The comparative analysis of pelvic floor dimensions between Hilly-region and "
-     "Inland/Plain-region cohorts provides medically significant insights into regional "
-     "anatomical variations and their clinical relevance to pelvic floor disorder (PFD) "
-     "assessment and management."),
+    ("2. Medical Significance",
+     "The comparative assessment of pelvic floor dimensions across the study cohorts "
+     "constitutes a substantive radiological contribution to the understanding and "
+     "clinical evaluation of pelvic floor disorders."),
 
-    ("3. Research Benefit",
-     "This research contributes meaningfully to the clinical understanding of "
-     "population-specific pelvic morphometry and will be of direct benefit to "
-     "radiologists, gynaecologists, and pelvic floor surgeons involved in diagnosis and "
-     "treatment planning for PFD patients in South India."),
+    ("3. Academic Merit",
+     "The dataset structure, measurement methodology, and derived parameters meet the "
+     "scientific standards required for academic publication and evidence-based research "
+     "in the field of pelvic floor medicine."),
 
-    ("4. Dataset Integrity",
-     "The dataset has been compiled with due adherence to patient privacy, institutional "
-     "ethics, and clinical accuracy standards. The findings are reliable and suitable for "
-     "academic publication and evidence-based clinical research."),
+    ("4. Ethical Compliance",
+     "The dataset has been compiled in strict accordance with patient confidentiality "
+     "obligations, institutional ethics requirements, and accepted clinical documentation "
+     "standards."),
 ]
 
 
@@ -213,24 +211,17 @@ def build():
     run.font.color.rgb = DARK_BLUE
 
     # Opening with bold name
-    body(doc,
-         "This is to acknowledge that I have carefully examined the Computed Tomography "
-         "(CT) pelvimetry dataset, pelvic floor morphometric measurements, and associated "
-         "research findings compiled by ",
-         after=0)
-    p_open = doc.paragraphs[-1]
-    p_open.clear()
+    p_open = doc.add_paragraph()
     p_open.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     set_spacing(p_open, before=0, after=3)
     for txt, bold in [
-        ("This is to acknowledge that I have carefully examined the Computed Tomography "
-         "(CT) pelvimetry dataset, pelvic floor morphometric measurements, and associated "
-         "research findings compiled by ", False),
+        ("This is to certify that the Computed Tomography (CT) pelvimetry dataset and "
+         "associated research documentation compiled by ", False),
         ("Mr. MUTHUKUMAR C", True),
         (", Research Scholar in Anatomy, USN No. ", False),
         ("24PH14ANA01", True),
         (", Sri Siddhartha Academy of Higher Education (SSAHE), Tumakuru, "
-         "for the Ph.D. thesis entitled:", False),
+         "in pursuance of the Ph.D. thesis entitled:", False),
     ]:
         r = p_open.add_run(txt)
         r.font.name  = "Times New Roman"
@@ -242,10 +233,10 @@ def build():
     body(doc, THESIS, italic=True, center=True, before=2, after=3)
 
     body(doc,
-         "Having reviewed the dataset comprising 10 sample female patient studies "
-         "(5 Hilly-region + 5 Inland/Plain-region) from PACS repositories across "
-         "institutions in Kerala, Karnataka, and Tamil Nadu, I hereby acknowledge and "
-         "confirm the following:")
+         "has been duly examined and is hereby formally acknowledged. The dataset "
+         "comprises 10 sample female patient studies (5 Hilly-region + 5 Inland/Plain-"
+         "region) sourced from institutional PACS repositories. The following is "
+         "declared:")
 
     # Numbered items
     for heading, content in ITEMS:
@@ -263,23 +254,18 @@ def build():
         r2.font.size  = Pt(10)
         r2.font.color.rgb = BLACK
 
-    # Closing with bold name
+    # Closing
     p_close = doc.add_paragraph()
     p_close.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     set_spacing(p_close, before=4, after=6)
-    for txt, bold in [
-        ("I hereby acknowledge that the research conducted by ", False),
-        ("Mr. MUTHUKUMAR C", True),
-        (" using this CT pelvimetry dataset is medically validated and clinically sound, "
-         "and holds considerable scope for advancing future research in the field of "
-         "pelvic floor medicine, with broad academic relevance and meaningful potential "
-         "for wider clinical application in the years ahead.", False),
-    ]:
-        r = p_close.add_run(txt)
-        r.font.name  = "Times New Roman"
-        r.font.size  = Pt(10)
-        r.font.bold  = bold
-        r.font.color.rgb = BLACK
+    r = p_close.add_run(
+        "The research presented herein is formally acknowledged as medically "
+        "substantiated and academically rigorous, with recognised scope for future "
+        "advancement and broader application in the field of pelvic floor medicine."
+    )
+    r.font.name  = "Times New Roman"
+    r.font.size  = Pt(10)
+    r.font.color.rgb = BLACK
 
     # Date / Place
     dp = doc.add_paragraph()

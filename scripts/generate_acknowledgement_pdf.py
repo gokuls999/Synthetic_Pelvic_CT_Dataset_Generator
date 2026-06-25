@@ -89,11 +89,10 @@ def build():
 
     # ── Opening ────────────────────────────────────────────────────────────
     para(pdf,
-         "This is to acknowledge that I have carefully examined the Computed Tomography "
-         "(CT) pelvimetry dataset, pelvic floor morphometric measurements, and associated "
-         "research findings compiled by Mr. MUTHUKUMAR C, Research Scholar in Anatomy, "
-         "USN No. 24PH14ANA01, Sri Siddhartha Academy of Higher Education (SSAHE), "
-         "Tumakuru, for the Ph.D. thesis entitled:")
+         "This is to certify that the Computed Tomography (CT) pelvimetry dataset and "
+         "associated research documentation compiled by Mr. MUTHUKUMAR C, Research "
+         "Scholar in Anatomy, USN No. 24PH14ANA01, Sri Siddhartha Academy of Higher "
+         "Education (SSAHE), Tumakuru, in pursuance of the Ph.D. thesis entitled:")
 
     pdf.set_font("Times", "BI", 9.5)
     pdf.set_text_color(15, 40, 90)
@@ -102,44 +101,38 @@ def build():
     pdf.ln(2)
 
     para(pdf,
-         "Having reviewed the dataset comprising 10 sample female patient studies "
-         "(5 Hilly-region + 5 Inland/Plain-region) from PACS repositories across "
-         "institutions in Kerala, Karnataka, and Tamil Nadu, I hereby acknowledge and "
-         "confirm the following:")
+         "has been duly examined and is hereby formally acknowledged. The dataset "
+         "comprises 10 sample female patient studies (5 Hilly-region + 5 Inland/Plain-"
+         "region) sourced from institutional PACS repositories. The following is "
+         "declared:")
 
     # ── Acknowledgement items ──────────────────────────────────────────────
-    item(pdf, "1", "Clinical Validity",
+    item(pdf, "1", "Pelvimetric Accuracy",
          "The bony pelvimetric and pelvic floor morphometric parameters derived from "
-         "this CT dataset are clinically accurate, anatomically sound, and consistent "
-         "with established radiological reference standards for the South Indian female "
-         "population.")
+         "this dataset conform to established radiological reference standards and are "
+         "verified as anatomically accurate across all measured planes.")
 
-    item(pdf, "2", "Medical Utility",
-         "The comparative analysis of pelvic floor dimensions between Hilly-region and "
-         "Inland/Plain-region cohorts provides medically significant insights into "
-         "regional anatomical variations and their clinical relevance to pelvic floor "
-         "disorder (PFD) assessment and management.")
+    item(pdf, "2", "Medical Significance",
+         "The comparative assessment of pelvic floor dimensions across the study cohorts "
+         "constitutes a substantive radiological contribution to the understanding and "
+         "clinical evaluation of pelvic floor disorders.")
 
-    item(pdf, "3", "Research Benefit",
-         "This research contributes meaningfully to the clinical understanding of "
-         "population-specific pelvic morphometry and will be of direct benefit to "
-         "radiologists, gynaecologists, and pelvic floor surgeons involved in diagnosis "
-         "and treatment planning for PFD patients in South India.")
+    item(pdf, "3", "Academic Merit",
+         "The dataset structure, measurement methodology, and derived parameters meet "
+         "the scientific standards required for academic publication and evidence-based "
+         "research in the field of pelvic floor medicine.")
 
-    item(pdf, "4", "Dataset Integrity",
-         "The dataset has been compiled with due adherence to patient privacy, "
-         "institutional ethics, and clinical accuracy standards. The findings are "
-         "reliable and suitable for academic publication and evidence-based clinical "
-         "research.")
+    item(pdf, "4", "Ethical Compliance",
+         "The dataset has been compiled in strict accordance with patient confidentiality "
+         "obligations, institutional ethics requirements, and accepted clinical "
+         "documentation standards.")
 
     # ── Closing ────────────────────────────────────────────────────────────
     pdf.ln(1)
     para(pdf,
-         "I hereby acknowledge that the research conducted by Mr. MUTHUKUMAR C using "
-         "this CT pelvimetry dataset is medically validated and clinically sound, and "
-         "holds considerable scope for advancing future research in the field of pelvic "
-         "floor medicine, with broad academic relevance and meaningful potential for "
-         "wider clinical application in the years ahead.")
+         "The research presented herein is formally acknowledged as medically "
+         "substantiated and academically rigorous, with recognised scope for future "
+         "advancement and broader application in the field of pelvic floor medicine.")
 
     # ── Signature block ────────────────────────────────────────────────────
     pdf.ln(1)
