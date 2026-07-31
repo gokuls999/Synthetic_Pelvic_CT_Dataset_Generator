@@ -21,7 +21,7 @@ from fpdf import FPDF
 cfg        = load_config("configs/default.yaml")
 cache_root = Path(cfg["paths"]["cache_dir"])
 SRC_ROOT   = Path("synthetic_dataset/PFD_Real_Dataset_350")
-OUT_ROOT   = Path("PFD_Sample_10_Patients")
+OUT_ROOT   = Path("D:/PFD_Sample_10_Patients")
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 NAVY   = (14, 42, 71)
@@ -550,14 +550,14 @@ def main():
         out_dir   = OUT_ROOT / subfolder / src_dir.name
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Copy DICOM folder
-        src_dicom = src_dir / "DICOM"
-        dst_dicom = out_dir / "DICOM"
-        if src_dicom.exists() and not dst_dicom.exists():
-            shutil.copytree(str(src_dicom), str(dst_dicom))
-
-        # Copy metadata
-        shutil.copy2(str(src_dir / "metadata_real.json"), str(out_dir / "metadata_real.json"))
+        # Copy all source subfolders and files (DICOM, JPG, PNG, COMPARISON.png, metadata)
+        for item in src_dir.iterdir():
+            dst_item = out_dir / item.name
+            if item.is_dir():
+                if not dst_item.exists():
+                    shutil.copytree(str(item), str(dst_item))
+            else:
+                shutil.copy2(str(item), str(dst_item))
 
         # Load stats
         stats, spacing = load_stats_and_spacing(meta["source_dataset"], meta["source_uid"])
